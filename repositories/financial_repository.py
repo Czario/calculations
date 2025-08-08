@@ -154,13 +154,7 @@ class FinancialDataRepository:
                             annual_concept = dim_concept
                             break
         
-        # If still not found, fallback to original method
-        if not annual_concept:
-            annual_concept = self.db["normalized_concepts_annual"].find_one({
-                "concept": concept_name,
-                "company_cik": company_cik,
-                "statement_type": "income_statement"
-            })
+        # No path-based fallback - rely only on parent concept matching
         
         # Get quarterly values (Q1, Q2, Q3)
         quarterly_values = list(self.concept_values_quarterly.find({
@@ -272,14 +266,7 @@ class FinancialDataRepository:
                             annual_concept = dim_concept
                             break
         
-        # If still not found, fallback to original method
-        if not annual_concept:
-            annual_concept = self.db["normalized_concepts_annual"].find_one({
-                "concept": concept_name,
-                "path": concept_path,
-                "company_cik": company_cik,
-                "statement_type": "income_statement"
-            })
+        # No path-based fallback - rely only on parent concept matching
         
         # Get quarterly values (Q1, Q2, Q3)
         quarterly_values = list(self.concept_values_quarterly.find({
@@ -467,13 +454,7 @@ class FinancialDataRepository:
                             annual_concept = dim_concept
                             break
         
-        # If still not found, fallback to original method
-        if not annual_concept:
-            annual_concept = self.normalized_concepts_annual.find_one({
-                "concept": concept_name,
-                "company_cik": company_cik,
-                "statement_type": "income_statement"
-            })
+        # No path-based fallback - rely only on parent concept matching
         
         if not annual_concept:
             return None
@@ -547,14 +528,7 @@ class FinancialDataRepository:
                             annual_concept = dim_concept
                             break
         
-        # If still not found, fallback to original method
-        if not annual_concept:
-            annual_concept = self.normalized_concepts_annual.find_one({
-                "concept": concept_name,
-                "path": concept_path,
-                "company_cik": company_cik,
-                "statement_type": "income_statement"
-            })
+        # No path-based fallback - rely only on parent concept matching
         
         if not annual_concept:
             return None
