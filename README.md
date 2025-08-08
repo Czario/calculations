@@ -6,6 +6,13 @@ This project calculates Quarter 4 (Q4) values for income statement concepts by u
 Q4 = Annual Value - (Q1 + Q2 + Q3)
 ```
 
+**⚠️ CRITICAL RULE:** Q4 is **NEVER** calculated if **ANY** of the required values (Annual, Q1, Q2, or Q3) are missing. This rule applies to **ALL DATA TYPES**:
+- ✅ Regular income statement concepts
+- ✅ Dimensional concepts (e.g., country:US, segment data)  
+- ✅ Any other financial data
+
+The system will **COMPLETELY SKIP** the calculation if even **ONE** value is unavailable, regardless of the data type or concept structure.
+
 ## Features
 
 - Connects to MongoDB database containing normalized financial data
@@ -73,10 +80,11 @@ The application works with the following MongoDB collections:
 
 ## Business Logic
 
-1. **Data Validation:** Only processes concepts where all required values (Annual, Q1, Q2, Q3) are available
-2. **Duplicate Prevention:** Skips calculation if Q4 value already exists
-3. **Error Handling:** Logs detailed information about missing data and errors
-4. **Metadata Preservation:** Maintains original SEC filing metadata in calculated records
+1. **Universal Strict Validation:** Q4 calculations are **ONLY** performed when **ALL** required values (Annual, Q1, Q2, Q3) are available. If **ANY** value is missing, the calculation is **SKIPPED ENTIRELY** - this applies to **ALL DATA TYPES** including regular concepts, dimensional concepts, and any other financial data.
+2. **Parent Concept Matching:** Uses parent concept relationships (not path-based matching) to ensure consistency between quarterly and annual filings.
+3. **Duplicate Prevention:** Skips calculation if Q4 value already exists.
+4. **Error Handling:** Logs detailed information about missing data and errors.
+5. **Metadata Preservation:** Maintains original SEC filing metadata in calculated records.
 
 ## Output
 

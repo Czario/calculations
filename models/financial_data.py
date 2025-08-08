@@ -66,11 +66,24 @@ class QuarterlyData:
         return self.annual_value is not None
     
     def can_calculate_q4(self) -> bool:
-        """Check if Q4 can be calculated."""
+        """
+        Check if Q4 can be calculated.
+        
+        CRITICAL RULE: Q4 is NEVER calculated if ANY value is missing.
+        This applies to ALL data types: regular concepts, dimensional concepts, 
+        and any other financial data. ALL four values (Annual, Q1, Q2, Q3) 
+        must be present.
+        """
         return self.has_complete_quarterly_data() and self.has_annual_value()
     
     def calculate_q4(self) -> float:
-        """Calculate Q4 value using the formula: Annual - (Q1 + Q2 + Q3)."""
+        """
+        Calculate Q4 value using the formula: Annual - (Q1 + Q2 + Q3).
+        
+        CRITICAL RULE: This method will raise ValueError if ANY value is missing.
+        All four values (Annual, Q1, Q2, Q3) must be present regardless of 
+        data type (regular, dimensional, or any other concept type).
+        """
         if not self.can_calculate_q4():
             raise ValueError("Cannot calculate Q4: missing required values")
         
