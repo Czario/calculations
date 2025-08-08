@@ -326,12 +326,13 @@ class Q4CalculationService:
         company_cik: str, 
         fiscal_year: int
     ) -> Dict[str, Any]:
-        """Calculate Q4 for a specific concept by name and path, company, and fiscal year."""
+        """Calculate Q4 for a specific concept by name and path, company, and fiscal year.
+        Uses parent concept matching to ensure consistency between quarterly and annual filings."""
         
         result = {"success": False, "reason": None}
         
         try:
-            # Get quarterly data using concept name and path
+            # Get quarterly data using enhanced parent concept matching
             quarterly_data = self.repository.get_quarterly_data_for_concept_by_name_and_path(
                 concept_name, concept_path, company_cik, fiscal_year
             )
@@ -364,13 +365,13 @@ class Q4CalculationService:
             # Calculate Q4 value
             q4_value = quarterly_data.calculate_q4()
             
-            # Create Q4 record
-            q4_record = self._create_q4_record_by_name_and_path(
+            # Create Q4 record using enhanced parent concept matching
+            q4_record = self._create_q4_record_by_name_and_path_with_parent_matching(
                 concept_name, concept_path, quarterly_data.concept_id, company_cik, fiscal_year, q4_value
             )
             
             if q4_record is None:
-                result["reason"] = "Could not create Q4 record (missing annual filing metadata)"
+                result["reason"] = "Could not create Q4 record (missing annual filing metadata or parent concept mismatch)"
                 return result
             
             # Insert Q4 value
@@ -436,6 +437,79 @@ class Q4CalculationService:
             dimension_value=annual_metadata.get("dimension_value", False),
             calculated=True,  # Mark as calculated
             fact_id=f"Q4_CALC_{annual_metadata.get('fact_id', str(annual_metadata['_id']))}",
+            decimals=annual_metadata.get("decimals", "-6"),
+            dimensional_concept_id=annual_metadata.get("dimensional_concept_id")
+        )
+        
+        return q4_concept_value
+
+    def _create_q4_record_by_name_and_path_with_parent_matching(
+        self, 
+        concept_name: str,
+        concept_path: str,
+        quarterly_concept_id: ObjectId,
+        company_cik: str, 
+        fiscal_year: int, 
+        q4_value: float
+    ) -> Optional[ConceptValue]:
+        """Create a Q4 ConceptValue record using enhanced parent concept matching between quarterly and annual filings."""
+        
+        # Get annual filing metadata using enhanced parent concept matching
+        annual_metadata = self.repository.get_annual_filing_metadata_by_name_and_path(
+            concept_name, concept_path, company_cik, fiscal_year
+        )
+        
+        if not annual_metadata:
+            # Try alternative matching using parent concept lookup
+            quarterly_parent_name = self.repository.get_parent_concept_name(quarterly_concept_id, "normalized_concepts_quarterly")
+            if quarterly_parent_name:
+                # Look for annual concept by parent concept name
+                annual_concept = self.repository.find_matching_concept_by_parent(
+                    concept_name, quarterly_concept_id, "normalized_concepts_annual", company_cik
+                )
+                
+                if annual_concept:
+                    annual_metadata = self.repository.db["concept_values_annual"].find_one({
+                        "concept_id": annual_concept["_id"],
+                        "company_cik": company_cik,
+                        "reporting_period.fiscal_year": fiscal_year
+                    })
+        
+        if not annual_metadata:
+            return None
+        
+        # Extract reporting period from annual data
+        annual_period = annual_metadata["reporting_period"]
+        
+        # Create Q4 reporting period
+        q4_reporting_period = ReportingPeriod(
+            end_date=annual_period["end_date"],
+            period_date=annual_period["period_date"],
+            period_type="quarterly",
+            form_type="10-Q",
+            fiscal_year_end_code=annual_period["fiscal_year_end_code"],
+            data_source="calculated_from_sec_api_raw_with_parent_matching",
+            company_cik=company_cik,
+            company_name=annual_period["company_name"],
+            start_date=annual_period.get("start_date", annual_period["end_date"]),
+            fiscal_year=fiscal_year,
+            quarter=4,
+            note="Q4 calculated from annual 10-K minus Q1-Q3 individual values - using parent concept matching for dimensional consistency"
+        )
+        
+        # Create Q4 ConceptValue using quarterly concept_id
+        q4_concept_value = ConceptValue(
+            concept_id=quarterly_concept_id,  # Use quarterly concept_id for consistency
+            company_cik=company_cik,
+            statement_type=annual_metadata["statement_type"],
+            form_type="10-Q",
+            filing_id=annual_metadata["filing_id"],
+            reporting_period=q4_reporting_period,
+            value=q4_value,
+            created_at=datetime.utcnow(),
+            dimension_value=annual_metadata.get("dimension_value", False),
+            calculated=True,  # Mark as calculated
+            fact_id=f"Q4_CALC_PARENT_MATCH_{annual_metadata.get('fact_id', str(annual_metadata['_id']))}",
             decimals=annual_metadata.get("decimals", "-6"),
             dimensional_concept_id=annual_metadata.get("dimensional_concept_id")
         )

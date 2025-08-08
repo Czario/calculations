@@ -97,7 +97,7 @@ class FinancialDataRepository:
     ) -> QuarterlyData:
         """Get quarterly data for a specific concept by name, company, and fiscal year."""
         
-        # Get the quarterly concept_id for this concept name
+        # Get the quarterly concept for this concept name
         quarterly_concept = self.normalized_concepts_quarterly.find_one({
             "concept": concept_name,
             "company_cik": company_cik,
@@ -113,12 +113,54 @@ class FinancialDataRepository:
         
         quarterly_concept_id = quarterly_concept["_id"]
         
-        # Get the annual concept_id for this concept name
-        annual_concept = self.db["normalized_concepts_annual"].find_one({
-            "concept": concept_name,
-            "company_cik": company_cik,
-            "statement_type": "income_statement"
-        })
+        # Find the parent concept if this is a dimensional concept
+        quarterly_parent_concept_id = quarterly_concept.get("concept_id")
+        if quarterly_parent_concept_id:
+            # This is a dimensional concept, use parent concept for matching
+            quarterly_parent_concept = self.normalized_concepts_quarterly.find_one({
+                "_id": quarterly_parent_concept_id
+            })
+            quarterly_parent_concept_name = quarterly_parent_concept.get("concept") if quarterly_parent_concept else None
+        else:
+            # This is a regular concept
+            quarterly_parent_concept_name = concept_name
+        
+        # Find the matching annual concept using parent concept name
+        annual_concept = None
+        if quarterly_parent_concept_name:
+            # Try to find annual concept by parent concept name first
+            annual_concept = self.db["normalized_concepts_annual"].find_one({
+                "concept": quarterly_parent_concept_name,
+                "company_cik": company_cik,
+                "statement_type": "income_statement"
+            })
+            
+            # If not found and this is a dimensional concept, try to find by concept and dimensional relationship
+            if not annual_concept and quarterly_parent_concept_id:
+                # Look for dimensional concepts in annual that match the parent
+                annual_dimensional_concepts = list(self.db["normalized_concepts_annual"].find({
+                    "concept": concept_name,
+                    "company_cik": company_cik,
+                    "statement_type": "income_statement",
+                    "dimension_concept": True
+                }))
+                
+                # Find the one that has the same parent concept
+                for dim_concept in annual_dimensional_concepts:
+                    annual_parent_id = dim_concept.get("concept_id")
+                    if annual_parent_id:
+                        annual_parent = self.db["normalized_concepts_annual"].find_one({"_id": annual_parent_id})
+                        if annual_parent and annual_parent.get("concept") == quarterly_parent_concept_name:
+                            annual_concept = dim_concept
+                            break
+        
+        # If still not found, fallback to original method
+        if not annual_concept:
+            annual_concept = self.db["normalized_concepts_annual"].find_one({
+                "concept": concept_name,
+                "company_cik": company_cik,
+                "statement_type": "income_statement"
+            })
         
         # Get quarterly values (Q1, Q2, Q3)
         quarterly_values = list(self.concept_values_quarterly.find({
@@ -172,7 +214,7 @@ class FinancialDataRepository:
     ) -> QuarterlyData:
         """Get quarterly data for a specific concept by name and path, company, and fiscal year."""
         
-        # Get the quarterly concept_id for this concept name and path
+        # Get the quarterly concept for this concept name and path
         quarterly_concept = self.normalized_concepts_quarterly.find_one({
             "concept": concept_name,
             "path": concept_path,
@@ -189,13 +231,55 @@ class FinancialDataRepository:
         
         quarterly_concept_id = quarterly_concept["_id"]
         
-        # Get the annual concept_id for this concept name and path
-        annual_concept = self.db["normalized_concepts_annual"].find_one({
-            "concept": concept_name,
-            "path": concept_path,
-            "company_cik": company_cik,
-            "statement_type": "income_statement"
-        })
+        # Find the parent concept if this is a dimensional concept
+        quarterly_parent_concept_id = quarterly_concept.get("concept_id")
+        if quarterly_parent_concept_id:
+            # This is a dimensional concept, use parent concept for matching
+            quarterly_parent_concept = self.normalized_concepts_quarterly.find_one({
+                "_id": quarterly_parent_concept_id
+            })
+            quarterly_parent_concept_name = quarterly_parent_concept.get("concept") if quarterly_parent_concept else None
+        else:
+            # This is a regular concept
+            quarterly_parent_concept_name = concept_name
+        
+        # Find the matching annual concept using parent concept name
+        annual_concept = None
+        if quarterly_parent_concept_name:
+            # Try to find annual concept by parent concept name first
+            annual_concept = self.db["normalized_concepts_annual"].find_one({
+                "concept": quarterly_parent_concept_name,
+                "company_cik": company_cik,
+                "statement_type": "income_statement"
+            })
+            
+            # If not found and this is a dimensional concept, try to find by concept and dimensional relationship
+            if not annual_concept and quarterly_parent_concept_id:
+                # Look for dimensional concepts in annual that match the parent
+                annual_dimensional_concepts = list(self.db["normalized_concepts_annual"].find({
+                    "concept": concept_name,
+                    "company_cik": company_cik,
+                    "statement_type": "income_statement",
+                    "dimension_concept": True
+                }))
+                
+                # Find the one that has the same parent concept
+                for dim_concept in annual_dimensional_concepts:
+                    annual_parent_id = dim_concept.get("concept_id")
+                    if annual_parent_id:
+                        annual_parent = self.db["normalized_concepts_annual"].find_one({"_id": annual_parent_id})
+                        if annual_parent and annual_parent.get("concept") == quarterly_parent_concept_name:
+                            annual_concept = dim_concept
+                            break
+        
+        # If still not found, fallback to original method
+        if not annual_concept:
+            annual_concept = self.db["normalized_concepts_annual"].find_one({
+                "concept": concept_name,
+                "path": concept_path,
+                "company_cik": company_cik,
+                "statement_type": "income_statement"
+            })
         
         # Get quarterly values (Q1, Q2, Q3)
         quarterly_values = list(self.concept_values_quarterly.find({
@@ -332,12 +416,64 @@ class FinancialDataRepository:
         fiscal_year: int
     ) -> Optional[Dict[str, Any]]:
         """Get annual filing metadata by concept name for creating Q4 records."""
-        # First get the annual concept_id for this concept name
-        annual_concept = self.normalized_concepts_annual.find_one({
+        # First get the quarterly concept for this concept name
+        quarterly_concept = self.normalized_concepts_quarterly.find_one({
             "concept": concept_name,
             "company_cik": company_cik,
             "statement_type": "income_statement"
         })
+        
+        if not quarterly_concept:
+            return None
+        
+        # Find the parent concept if this is a dimensional concept
+        quarterly_parent_concept_id = quarterly_concept.get("concept_id")
+        if quarterly_parent_concept_id:
+            # This is a dimensional concept, use parent concept for matching
+            quarterly_parent_concept = self.normalized_concepts_quarterly.find_one({
+                "_id": quarterly_parent_concept_id
+            })
+            quarterly_parent_concept_name = quarterly_parent_concept.get("concept") if quarterly_parent_concept else None
+        else:
+            # This is a regular concept
+            quarterly_parent_concept_name = concept_name
+        
+        # Find the matching annual concept using parent concept name
+        annual_concept = None
+        if quarterly_parent_concept_name:
+            # Try to find annual concept by parent concept name first
+            annual_concept = self.normalized_concepts_annual.find_one({
+                "concept": quarterly_parent_concept_name,
+                "company_cik": company_cik,
+                "statement_type": "income_statement"
+            })
+            
+            # If not found and this is a dimensional concept, try to find by concept and dimensional relationship
+            if not annual_concept and quarterly_parent_concept_id:
+                # Look for dimensional concepts in annual that match the parent
+                annual_dimensional_concepts = list(self.normalized_concepts_annual.find({
+                    "concept": concept_name,
+                    "company_cik": company_cik,
+                    "statement_type": "income_statement",
+                    "dimension_concept": True
+                }))
+                
+                # Find the one that has the same parent concept
+                for dim_concept in annual_dimensional_concepts:
+                    annual_parent_id = dim_concept.get("concept_id")
+                    if annual_parent_id:
+                        annual_parent = self.normalized_concepts_annual.find_one({"_id": annual_parent_id})
+                        if annual_parent and annual_parent.get("concept") == quarterly_parent_concept_name:
+                            annual_concept = dim_concept
+                            break
+        
+        # If still not found, fallback to original method
+        if not annual_concept:
+            annual_concept = self.normalized_concepts_annual.find_one({
+                "concept": concept_name,
+                "company_cik": company_cik,
+                "statement_type": "income_statement"
+            })
         
         if not annual_concept:
             return None
@@ -359,13 +495,66 @@ class FinancialDataRepository:
         fiscal_year: int
     ) -> Optional[Dict[str, Any]]:
         """Get annual filing metadata by concept name and path for creating Q4 records."""
-        # First get the annual concept_id for this concept name and path
-        annual_concept = self.normalized_concepts_annual.find_one({
+        # First get the quarterly concept for this concept name and path
+        quarterly_concept = self.normalized_concepts_quarterly.find_one({
             "concept": concept_name,
             "path": concept_path,
             "company_cik": company_cik,
             "statement_type": "income_statement"
         })
+        
+        if not quarterly_concept:
+            return None
+        
+        # Find the parent concept if this is a dimensional concept
+        quarterly_parent_concept_id = quarterly_concept.get("concept_id")
+        if quarterly_parent_concept_id:
+            # This is a dimensional concept, use parent concept for matching
+            quarterly_parent_concept = self.normalized_concepts_quarterly.find_one({
+                "_id": quarterly_parent_concept_id
+            })
+            quarterly_parent_concept_name = quarterly_parent_concept.get("concept") if quarterly_parent_concept else None
+        else:
+            # This is a regular concept
+            quarterly_parent_concept_name = concept_name
+        
+        # Find the matching annual concept using parent concept name
+        annual_concept = None
+        if quarterly_parent_concept_name:
+            # Try to find annual concept by parent concept name first
+            annual_concept = self.normalized_concepts_annual.find_one({
+                "concept": quarterly_parent_concept_name,
+                "company_cik": company_cik,
+                "statement_type": "income_statement"
+            })
+            
+            # If not found and this is a dimensional concept, try to find by concept and dimensional relationship
+            if not annual_concept and quarterly_parent_concept_id:
+                # Look for dimensional concepts in annual that match the parent
+                annual_dimensional_concepts = list(self.normalized_concepts_annual.find({
+                    "concept": concept_name,
+                    "company_cik": company_cik,
+                    "statement_type": "income_statement",
+                    "dimension_concept": True
+                }))
+                
+                # Find the one that has the same parent concept
+                for dim_concept in annual_dimensional_concepts:
+                    annual_parent_id = dim_concept.get("concept_id")
+                    if annual_parent_id:
+                        annual_parent = self.normalized_concepts_annual.find_one({"_id": annual_parent_id})
+                        if annual_parent and annual_parent.get("concept") == quarterly_parent_concept_name:
+                            annual_concept = dim_concept
+                            break
+        
+        # If still not found, fallback to original method
+        if not annual_concept:
+            annual_concept = self.normalized_concepts_annual.find_one({
+                "concept": concept_name,
+                "path": concept_path,
+                "company_cik": company_cik,
+                "statement_type": "income_statement"
+            })
         
         if not annual_concept:
             return None
@@ -378,6 +567,72 @@ class FinancialDataRepository:
             "reporting_period.fiscal_year": fiscal_year
         })
         return annual_record
+
+    def get_parent_concept_name(self, concept_id: ObjectId, collection_name: str = "normalized_concepts_quarterly") -> Optional[str]:
+        """Get the parent concept name for a given concept. Used for dimensional concepts."""
+        collection = getattr(self.db, collection_name)
+        
+        concept = collection.find_one({"_id": concept_id})
+        if not concept:
+            return None
+        
+        # If this concept has a concept_id field, it's a dimensional concept
+        parent_concept_id = concept.get("concept_id")
+        if parent_concept_id:
+            parent_concept = collection.find_one({"_id": parent_concept_id})
+            return parent_concept.get("concept") if parent_concept else None
+        else:
+            # This is already a parent concept
+            return concept.get("concept")
+
+    def find_matching_concept_by_parent(
+        self,
+        concept_name: str,
+        source_concept_id: ObjectId,
+        target_collection: str,
+        company_cik: str
+    ) -> Optional[Dict[str, Any]]:
+        """Find a matching concept in target collection based on parent concept relationship."""
+        source_collection_name = "normalized_concepts_quarterly" if target_collection == "normalized_concepts_annual" else "normalized_concepts_quarterly"
+        source_collection = getattr(self.db, source_collection_name)
+        target_collection_obj = getattr(self.db, target_collection)
+        
+        # Get the source concept
+        source_concept = source_collection.find_one({"_id": source_concept_id})
+        if not source_concept:
+            return None
+        
+        # Get parent concept name
+        parent_concept_name = self.get_parent_concept_name(source_concept_id, source_collection_name)
+        if not parent_concept_name:
+            return None
+        
+        # First try to find by exact concept name match
+        target_concept = target_collection_obj.find_one({
+            "concept": concept_name,
+            "company_cik": company_cik,
+            "statement_type": "income_statement"
+        })
+        
+        if target_concept:
+            return target_concept
+        
+        # If source is dimensional, look for dimensional concepts in target with same parent
+        if source_concept.get("dimension_concept"):
+            # Look for dimensional concepts with same name and same parent
+            dimensional_concepts = list(target_collection_obj.find({
+                "concept": concept_name,
+                "company_cik": company_cik,
+                "statement_type": "income_statement",
+                "dimension_concept": True
+            }))
+            
+            for dim_concept in dimensional_concepts:
+                target_parent_name = self.get_parent_concept_name(dim_concept["_id"], target_collection)
+                if target_parent_name == parent_concept_name:
+                    return dim_concept
+        
+        return None
     
     def insert_q4_value(self, q4_value: ConceptValue) -> bool:
         """Insert calculated Q4 value into the database."""
