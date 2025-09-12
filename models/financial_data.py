@@ -35,14 +35,14 @@ class ConceptValue:
     company_cik: str
     statement_type: str
     form_type: str
-    filing_id: ObjectId
     reporting_period: ReportingPeriod
     value: float
     created_at: datetime
     dimension_value: bool
     calculated: bool
-    fact_id: str
-    decimals: str
+    filing_id: Optional[ObjectId] = None
+    fact_id: Optional[str] = None
+    decimals: Optional[str] = None
     dimensional_concept_id: Optional[ObjectId] = None
 
 

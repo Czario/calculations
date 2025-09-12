@@ -635,12 +635,11 @@ class FinancialDataRepository:
     
     def _concept_value_to_dict(self, concept_value: ConceptValue) -> Dict[str, Any]:
         """Convert ConceptValue dataclass to dictionary for MongoDB insertion."""
-        return {
+        result = {
             "concept_id": concept_value.concept_id,
             "company_cik": concept_value.company_cik,
             "statement_type": concept_value.statement_type,
             "form_type": concept_value.form_type,
-            "filing_id": concept_value.filing_id,
             "reporting_period": {
                 "end_date": concept_value.reporting_period.end_date,
                 "period_date": concept_value.reporting_period.period_date,
@@ -658,8 +657,17 @@ class FinancialDataRepository:
             "value": concept_value.value,
             "created_at": concept_value.created_at,
             "dimension_value": concept_value.dimension_value,
-            "calculated": concept_value.calculated,
-            "fact_id": concept_value.fact_id,
-            "decimals": concept_value.decimals,
-            "dimensional_concept_id": concept_value.dimensional_concept_id
+            "calculated": concept_value.calculated
         }
+        
+        # Add optional fields only if they exist
+        if concept_value.filing_id is not None:
+            result["filing_id"] = concept_value.filing_id
+        if concept_value.fact_id is not None:
+            result["fact_id"] = concept_value.fact_id
+        if concept_value.decimals is not None:
+            result["decimals"] = concept_value.decimals
+        if concept_value.dimensional_concept_id is not None:
+            result["dimensional_concept_id"] = concept_value.dimensional_concept_id
+            
+        return result

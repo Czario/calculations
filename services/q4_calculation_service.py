@@ -185,14 +185,14 @@ class Q4CalculationService:
             company_cik=company_cik,
             statement_type=annual_metadata["statement_type"],
             form_type="10-Q",
-            filing_id=annual_metadata["filing_id"],
             reporting_period=q4_reporting_period,
             value=q4_value,
             created_at=datetime.utcnow(),
             dimension_value=annual_metadata.get("dimension_value", False),
             calculated=True,  # Mark as calculated
-            fact_id=f"Q4_CALC_{annual_metadata['fact_id']}",
-            decimals=annual_metadata.get("decimals", "-6"),
+            filing_id=annual_metadata.get("filing_id"),  # Optional field
+            fact_id=annual_metadata.get("fact_id"),  # Optional field
+            decimals=annual_metadata.get("decimals"),  # Optional field
             dimensional_concept_id=annual_metadata.get("dimensional_concept_id")
         )
         
@@ -241,13 +241,13 @@ class Q4CalculationService:
             company_cik=company_cik,
             statement_type=annual_metadata["statement_type"],
             form_type="10-Q",
-            filing_id=annual_metadata["filing_id"],
+            filing_id=annual_metadata.get("filing_id"),
             reporting_period=q4_reporting_period,
             value=q4_value,
             created_at=datetime.utcnow(),
             dimension_value=annual_metadata.get("dimension_value", False),
             calculated=True,  # Mark as calculated
-            fact_id=f"Q4_CALC_{annual_metadata.get('fact_id', str(annual_metadata['_id']))}",
+            fact_id=annual_metadata.get("fact_id"),  # Optional field
             decimals=annual_metadata.get("decimals", "-6"),
             dimensional_concept_id=annual_metadata.get("dimensional_concept_id")
         )
@@ -430,13 +430,13 @@ class Q4CalculationService:
             company_cik=company_cik,
             statement_type=annual_metadata["statement_type"],
             form_type="10-Q",
-            filing_id=annual_metadata["filing_id"],
+            filing_id=annual_metadata.get("filing_id"),
             reporting_period=q4_reporting_period,
             value=q4_value,
             created_at=datetime.utcnow(),
             dimension_value=annual_metadata.get("dimension_value", False),
             calculated=True,  # Mark as calculated
-            fact_id=f"Q4_CALC_{annual_metadata.get('fact_id', str(annual_metadata['_id']))}",
+            fact_id=annual_metadata.get("fact_id"),  # Optional field
             decimals=annual_metadata.get("decimals", "-6"),
             dimensional_concept_id=annual_metadata.get("dimensional_concept_id")
         )
@@ -503,7 +503,7 @@ class Q4CalculationService:
             company_cik=company_cik,
             statement_type=annual_metadata["statement_type"],
             form_type="10-Q",
-            filing_id=annual_metadata["filing_id"],
+            filing_id=annual_metadata.get("filing_id"),
             reporting_period=q4_reporting_period,
             value=q4_value,
             created_at=datetime.utcnow(),
