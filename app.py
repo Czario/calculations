@@ -44,12 +44,19 @@ class Q4CalculationApp:
             raise
     
     def _process_company(self, service: Q4CalculationService, company_cik: str) -> None:
-        """Process Q4 calculations for a specific company."""
+        """Process Q4 calculations for a specific company (both income statement and cash flow)."""
         
         self.logger.info(f"Processing Q4 calculations for company: {company_cik}")
         
-        results = service.calculate_q4_for_company(company_cik)
-        self._log_results(company_cik, results)
+        # Process income statement
+        self.logger.info(f"Calculating income statement Q4 for {company_cik}...")
+        income_results = service.calculate_q4_for_company(company_cik)
+        self._log_results(company_cik, income_results)
+        
+        # Process cash flow statement
+        self.logger.info(f"Calculating cash flow statement Q4 for {company_cik}...")
+        cashflow_results = service.calculate_q4_for_cash_flow(company_cik)
+        self._log_results(company_cik, cashflow_results)
     
     def _process_all_companies(
         self, 
@@ -73,16 +80,27 @@ class Q4CalculationApp:
         total_successful = 0
         total_skipped = 0
         
-        for company_cik in companies:
+        for idx, company_cik in enumerate(companies, 1):
             try:
-                self.logger.info(f"Processing company {total_processed + 1}/{len(companies)}: {company_cik}")
+                self.logger.info(f"Processing company {idx}/{len(companies)}: {company_cik}")
                 
-                results = service.calculate_q4_for_company(company_cik)
-                self._log_results(company_cik, results)
+                # Process income statement
+                self.logger.info(f"  → Income Statement Q4 calculations")
+                income_results = service.calculate_q4_for_company(company_cik)
+                self._log_results(company_cik, income_results)
                 
-                total_processed += results["processed_concepts"]
-                total_successful += results["successful_calculations"]
-                total_skipped += results["skipped_concepts"]
+                total_processed += income_results["processed_concepts"]
+                total_successful += income_results["successful_calculations"]
+                total_skipped += income_results["skipped_concepts"]
+                
+                # Process cash flow statement
+                self.logger.info(f"  → Cash Flow Statement Q4 calculations")
+                cashflow_results = service.calculate_q4_for_cash_flow(company_cik)
+                self._log_results(company_cik, cashflow_results)
+                
+                total_processed += cashflow_results["processed_concepts"]
+                total_successful += cashflow_results["successful_calculations"]
+                total_skipped += cashflow_results["skipped_concepts"]
                 
             except Exception as e:
                 self.logger.error(f"Error processing company {company_cik}: {e}")
@@ -131,19 +149,40 @@ class Q4CalculationApp:
 def main():
     """Main entry point."""
     import sys
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='Calculate Q4 values for financial statements (income statement and cash flows)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python app.py                           # Process all companies
+  python app.py --cik 0000789019          # Process Microsoft only
+  python app.py --cik 0000320193          # Process Apple only
+
+The system calculates Q4 using: Q4 = Annual - (Q1 + Q2 + Q3)
+All four values (Annual, Q1, Q2, Q3) must be present for calculation.
+        """
+    )
+    
+    parser.add_argument(
+        '--cik',
+        type=str,
+        help='Company CIK to process (e.g., 0000789019 for Microsoft). If not provided, processes all companies.'
+    )
+    
+    args = parser.parse_args()
     
     app = Q4CalculationApp()
     
-    # Check for company CIK argument
-    company_cik = None
-    if len(sys.argv) > 1:
-        company_cik = sys.argv[1]
-        print(f"Processing Q4 calculations for company: {company_cik}")
+    # Display processing message
+    if args.cik:
+        print(f"Processing Q4 calculations for company: {args.cik}")
     else:
         print("Processing Q4 calculations for all companies...")
     
     try:
-        app.run_q4_calculation(company_cik)
+        app.run_q4_calculation(args.cik)
         print("Q4 calculation completed successfully!")
         
     except Exception as e:

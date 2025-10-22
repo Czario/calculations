@@ -1,6 +1,6 @@
 # Q4 Financial Calculations
 
-This project calculates Quarter 4 (Q4) values for income statement concepts by using the formula:
+This project calculates Quarter 4 (Q4) values for financial statements by using the formula:
 
 ```
 Q4 = Annual Value - (Q1 + Q2 + Q3)
@@ -8,6 +8,7 @@ Q4 = Annual Value - (Q1 + Q2 + Q3)
 
 **⚠️ CRITICAL RULE:** Q4 is **NEVER** calculated if **ANY** of the required values (Annual, Q1, Q2, or Q3) are missing. This rule applies to **ALL DATA TYPES**:
 - ✅ Regular income statement concepts
+- ✅ Cash flow statement concepts
 - ✅ Dimensional concepts (e.g., country:US, segment data)  
 - ✅ Any other financial data
 
@@ -16,7 +17,8 @@ The system will **COMPLETELY SKIP** the calculation if even **ONE** value is una
 ## Features
 
 - Connects to MongoDB database containing normalized financial data
-- Calculates Q4 values for income statement concepts
+- Calculates Q4 values for **income_statement** and **cash_flows** concepts
+- Preserves `accession_number` and other metadata from annual filings in Q4 records
 - Skips calculations when required values (Annual, Q1, Q2, Q3) are missing
 - Follows clean code principles with modular architecture
 - Comprehensive logging and error handling
@@ -60,23 +62,43 @@ calculations/
 
 ## Usage
 
-### Calculate Q4 for all companies:
+### Show help:
 ```bash
-python app.py
+uv run python app.py --help
 ```
 
 ### Calculate Q4 for a specific company:
 ```bash
-python app.py 0000320193  # Apple Inc.
+uv run python app.py --cik 0000789019  # Microsoft Corp.
+uv run python app.py --cik 0000320193  # Apple Inc.
 ```
+
+### Calculate Q4 for all companies:
+```bash
+uv run python app.py
+```
+
+**Note:** The system processes both income statement and cash flow concepts for each company.
 
 ## Database Schema
 
 The application works with the following MongoDB collections:
 
-- `normalized_concepts_quarterly` - Income statement concepts metadata
+- `normalized_concepts_quarterly` - Quarterly concepts metadata (income statement and cash flow)
+- `normalized_concepts_annual` - Annual concepts metadata (income statement and cash flow)
 - `concept_values_quarterly` - Quarterly financial values (Q1, Q2, Q3)
 - `concept_values_annual` - Annual financial values from 10-K filings
+
+### Q4 Record Structure
+
+Q4 records match the structure of existing quarterly records with these key fields:
+- `accession_number` - Preserved from the annual filing (required)
+- `statement_type` - One of: `income_statement`, `cash_flows`, `balance_sheet`, `comprehensive_income`
+- `dimension_value` - Boolean indicating if this is dimensional data
+- `dimensional_concept_id` - Link to the dimensional concept if applicable
+- `calculated` - Always `true` for Q4 records
+- `data_source` - Set to `calculated_from_sec_api_raw`
+- Additional metadata fields: `context_id`, `item_period`, `unit` (preserved from annual filing)
 
 ## Business Logic
 

@@ -41,6 +41,23 @@ class FinancialDataRepository:
             "dimensions": 1
         }))
     
+    def get_cash_flow_concepts(self, company_cik: str) -> List[Dict[str, Any]]:
+        """Get all cash flow concepts for a company, including dimensional concepts."""
+        return list(self.normalized_concepts_quarterly.find({
+            "company_cik": company_cik,
+            "statement_type": "cash_flows",  # Actual database uses 'cash_flows' not 'cash_flow_statement'
+            "abstract": False  # Only exclude abstract concepts, include both dimensional and non-dimensional
+        }, {
+            "_id": 1,
+            "concept": 1,
+            "path": 1,
+            "order_key": 1,
+            "label": 1,
+            "dimension_concept": 1,
+            "concept_name": 1,
+            "dimensions": 1
+        }))
+    
     def get_quarterly_data_for_concept(
         self, 
         concept_id: ObjectId, 
@@ -204,7 +221,8 @@ class FinancialDataRepository:
         concept_name: str,
         concept_path: str,
         company_cik: str, 
-        fiscal_year: int
+        fiscal_year: int,
+        statement_type: str = "income_statement"
     ) -> QuarterlyData:
         """Get quarterly data for a specific concept by name and path, company, and fiscal year."""
         
@@ -213,7 +231,7 @@ class FinancialDataRepository:
             "concept": concept_name,
             "path": concept_path,
             "company_cik": company_cik,
-            "statement_type": "income_statement"
+            "statement_type": statement_type
         })
         
         if not quarterly_concept:
@@ -635,25 +653,39 @@ class FinancialDataRepository:
     
     def _concept_value_to_dict(self, concept_value: ConceptValue) -> Dict[str, Any]:
         """Convert ConceptValue dataclass to dictionary for MongoDB insertion."""
+        reporting_period_dict = {
+            "end_date": concept_value.reporting_period.end_date,
+            "period_date": concept_value.reporting_period.period_date,
+            "form_type": concept_value.reporting_period.form_type,
+            "fiscal_year_end_code": concept_value.reporting_period.fiscal_year_end_code,
+            "data_source": concept_value.reporting_period.data_source,
+            "company_cik": concept_value.reporting_period.company_cik,
+            "company_name": concept_value.reporting_period.company_name,
+            "fiscal_year": concept_value.reporting_period.fiscal_year,
+            "quarter": concept_value.reporting_period.quarter,
+            "accession_number": concept_value.reporting_period.accession_number
+        }
+        
+        # Add optional reporting period fields if they exist
+        if concept_value.reporting_period.period_type is not None:
+            reporting_period_dict["period_type"] = concept_value.reporting_period.period_type
+        if concept_value.reporting_period.start_date is not None:
+            reporting_period_dict["start_date"] = concept_value.reporting_period.start_date
+        if concept_value.reporting_period.context_id is not None:
+            reporting_period_dict["context_id"] = concept_value.reporting_period.context_id
+        if concept_value.reporting_period.item_period is not None:
+            reporting_period_dict["item_period"] = concept_value.reporting_period.item_period
+        if concept_value.reporting_period.unit is not None:
+            reporting_period_dict["unit"] = concept_value.reporting_period.unit
+        if concept_value.reporting_period.note is not None:
+            reporting_period_dict["note"] = concept_value.reporting_period.note
+        
         result = {
             "concept_id": concept_value.concept_id,
             "company_cik": concept_value.company_cik,
             "statement_type": concept_value.statement_type,
             "form_type": concept_value.form_type,
-            "reporting_period": {
-                "end_date": concept_value.reporting_period.end_date,
-                "period_date": concept_value.reporting_period.period_date,
-                "period_type": concept_value.reporting_period.period_type,
-                "form_type": concept_value.reporting_period.form_type,
-                "fiscal_year_end_code": concept_value.reporting_period.fiscal_year_end_code,
-                "data_source": concept_value.reporting_period.data_source,
-                "company_cik": concept_value.reporting_period.company_cik,
-                "company_name": concept_value.reporting_period.company_name,
-                "start_date": concept_value.reporting_period.start_date,
-                "fiscal_year": concept_value.reporting_period.fiscal_year,
-                "quarter": concept_value.reporting_period.quarter,
-                "note": concept_value.reporting_period.note
-            },
+            "reporting_period": reporting_period_dict,
             "value": concept_value.value,
             "created_at": concept_value.created_at,
             "dimension_value": concept_value.dimension_value,
@@ -661,13 +693,222 @@ class FinancialDataRepository:
         }
         
         # Add optional fields only if they exist
-        if concept_value.filing_id is not None:
-            result["filing_id"] = concept_value.filing_id
-        if concept_value.fact_id is not None:
-            result["fact_id"] = concept_value.fact_id
-        if concept_value.decimals is not None:
-            result["decimals"] = concept_value.decimals
         if concept_value.dimensional_concept_id is not None:
             result["dimensional_concept_id"] = concept_value.dimensional_concept_id
             
         return result
+    
+    def get_statement_concepts(self, company_cik: str, statement_type: str) -> List[Dict[str, Any]]:
+        """Get all concepts for a company by statement type (generic method)."""
+        return list(self.normalized_concepts_quarterly.find({
+            "company_cik": company_cik,
+            "statement_type": statement_type,
+            "abstract": False
+        }, {
+            "_id": 1,
+            "concept": 1,
+            "path": 1,
+            "order_key": 1,
+            "label": 1,
+            "dimension_concept": 1,
+            "concept_name": 1,
+            "dimensions": 1
+        }))
+    
+    def check_q4_exists_by_name_and_path_generic(
+        self, 
+        concept_name: str,
+        concept_path: str,
+        company_cik: str, 
+        fiscal_year: int,
+        statement_type: str
+    ) -> bool:
+        """Check if Q4 value already exists for the given concept name and path (generic for any statement type)."""
+        quarterly_concept = self.normalized_concepts_quarterly.find_one({
+            "concept": concept_name,
+            "path": concept_path,
+            "company_cik": company_cik,
+            "statement_type": statement_type
+        })
+        
+        if not quarterly_concept:
+            return False
+            
+        quarterly_concept_id = quarterly_concept["_id"]
+        
+        existing_q4 = self.concept_values_quarterly.find_one({
+            "concept_id": quarterly_concept_id,
+            "company_cik": company_cik,
+            "reporting_period.fiscal_year": fiscal_year,
+            "reporting_period.quarter": 4
+        })
+        return existing_q4 is not None
+    
+    def get_quarterly_data_for_concept_by_name_and_path_generic(
+        self, 
+        concept_name: str,
+        concept_path: str,
+        company_cik: str, 
+        fiscal_year: int,
+        statement_type: str
+    ) -> QuarterlyData:
+        """Get quarterly data for a specific concept by name and path (generic for any statement type)."""
+        
+        # Get the quarterly concept for this concept name and path
+        quarterly_concept = self.normalized_concepts_quarterly.find_one({
+            "concept": concept_name,
+            "path": concept_path,
+            "company_cik": company_cik,
+            "statement_type": statement_type
+        })
+        
+        if not quarterly_concept:
+            return QuarterlyData(
+                concept_id=None,
+                company_cik=company_cik,
+                fiscal_year=fiscal_year
+            )
+        
+        quarterly_concept_id = quarterly_concept["_id"]
+        
+        # Find the parent concept if this is a dimensional concept
+        quarterly_parent_concept_id = quarterly_concept.get("concept_id")
+        if quarterly_parent_concept_id:
+            quarterly_parent_concept = self.normalized_concepts_quarterly.find_one({
+                "_id": quarterly_parent_concept_id
+            })
+            quarterly_parent_concept_name = quarterly_parent_concept.get("concept") if quarterly_parent_concept else None
+        else:
+            quarterly_parent_concept_name = concept_name
+        
+        # Find the matching annual concept using parent concept name
+        annual_concept = None
+        if quarterly_parent_concept_name:
+            annual_concept = self.db["normalized_concepts_annual"].find_one({
+                "concept": quarterly_parent_concept_name,
+                "company_cik": company_cik,
+                "statement_type": statement_type
+            })
+            
+            if not annual_concept and quarterly_parent_concept_id:
+                annual_dimensional_concepts = list(self.db["normalized_concepts_annual"].find({
+                    "concept": concept_name,
+                    "company_cik": company_cik,
+                    "statement_type": statement_type,
+                    "dimension_concept": True
+                }))
+                
+                for dim_concept in annual_dimensional_concepts:
+                    annual_parent_id = dim_concept.get("concept_id")
+                    if annual_parent_id:
+                        annual_parent = self.db["normalized_concepts_annual"].find_one({"_id": annual_parent_id})
+                        if annual_parent and annual_parent.get("concept") == quarterly_parent_concept_name:
+                            annual_concept = dim_concept
+                            break
+        
+        # Get quarterly values (Q1, Q2, Q3)
+        quarterly_values = list(self.concept_values_quarterly.find({
+            "concept_id": quarterly_concept_id,
+            "company_cik": company_cik,
+            "reporting_period.fiscal_year": fiscal_year,
+            "reporting_period.quarter": {"$in": [1, 2, 3]}
+        }))
+        
+        # Get annual value using annual concept_id if available
+        annual_values = []
+        if annual_concept:
+            annual_concept_id = annual_concept["_id"]
+            annual_values = list(self.concept_values_annual.find({
+                "concept_id": annual_concept_id,
+                "company_cik": company_cik,
+                "reporting_period.fiscal_year": fiscal_year
+            }))
+        
+        # Initialize quarterly data
+        quarterly_data = QuarterlyData(
+            concept_id=quarterly_concept_id,
+            company_cik=company_cik,
+            fiscal_year=fiscal_year
+        )
+        
+        # Map quarterly values
+        for q_value in quarterly_values:
+            quarter = q_value["reporting_period"]["quarter"]
+            value = q_value["value"]
+            
+            if quarter == 1:
+                quarterly_data.q1_value = value
+            elif quarter == 2:
+                quarterly_data.q2_value = value
+            elif quarter == 3:
+                quarterly_data.q3_value = value
+        
+        # Set annual value
+        if annual_values:
+            quarterly_data.annual_value = annual_values[0]["value"]
+        
+        return quarterly_data
+    
+    def get_annual_filing_metadata_by_name_and_path_generic(
+        self, 
+        concept_name: str,
+        concept_path: str,
+        company_cik: str, 
+        fiscal_year: int,
+        statement_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get annual filing metadata by concept name and path (generic for any statement type)."""
+        quarterly_concept = self.normalized_concepts_quarterly.find_one({
+            "concept": concept_name,
+            "path": concept_path,
+            "company_cik": company_cik,
+            "statement_type": statement_type
+        })
+        
+        if not quarterly_concept:
+            return None
+        
+        quarterly_parent_concept_id = quarterly_concept.get("concept_id")
+        if quarterly_parent_concept_id:
+            quarterly_parent_concept = self.normalized_concepts_quarterly.find_one({
+                "_id": quarterly_parent_concept_id
+            })
+            quarterly_parent_concept_name = quarterly_parent_concept.get("concept") if quarterly_parent_concept else None
+        else:
+            quarterly_parent_concept_name = concept_name
+        
+        annual_concept = None
+        if quarterly_parent_concept_name:
+            annual_concept = self.normalized_concepts_annual.find_one({
+                "concept": quarterly_parent_concept_name,
+                "company_cik": company_cik,
+                "statement_type": statement_type
+            })
+            
+            if not annual_concept and quarterly_parent_concept_id:
+                annual_dimensional_concepts = list(self.normalized_concepts_annual.find({
+                    "concept": concept_name,
+                    "company_cik": company_cik,
+                    "statement_type": statement_type,
+                    "dimension_concept": True
+                }))
+                
+                for dim_concept in annual_dimensional_concepts:
+                    annual_parent_id = dim_concept.get("concept_id")
+                    if annual_parent_id:
+                        annual_parent = self.normalized_concepts_annual.find_one({"_id": annual_parent_id})
+                        if annual_parent and annual_parent.get("concept") == quarterly_parent_concept_name:
+                            annual_concept = dim_concept
+                            break
+        
+        if not annual_concept:
+            return None
+            
+        annual_concept_id = annual_concept["_id"]
+        
+        annual_record = self.concept_values_annual.find_one({
+            "concept_id": annual_concept_id,
+            "company_cik": company_cik,
+            "reporting_period.fiscal_year": fiscal_year
+        })
+        return annual_record

@@ -16,15 +16,19 @@ class ReportingPeriod:
     """Represents a reporting period for financial data."""
     end_date: datetime
     period_date: str
-    period_type: str
     form_type: str
     fiscal_year_end_code: str
     data_source: str
     company_cik: str
     company_name: str
-    start_date: datetime
     fiscal_year: int
     quarter: int
+    accession_number: str  # Always present in real schema
+    period_type: Optional[str] = None  # Not always present
+    start_date: Optional[datetime] = None  # Not always present
+    context_id: Optional[str] = None  # Present in real data
+    item_period: Optional[datetime] = None  # Present in real data
+    unit: Optional[str] = None  # Present in real data
     note: Optional[str] = None
 
 
@@ -40,9 +44,7 @@ class ConceptValue:
     created_at: datetime
     dimension_value: bool
     calculated: bool
-    filing_id: Optional[ObjectId] = None
-    fact_id: Optional[str] = None
-    decimals: Optional[str] = None
+    # Note: filing_id and fact_id do NOT exist in the actual database schema
     dimensional_concept_id: Optional[ObjectId] = None
 
 
