@@ -22,8 +22,13 @@ class Q4CalculationApp:
         )
         self.logger = logging.getLogger(__name__)
     
-    def run_q4_calculation(self, company_cik: Optional[str] = None) -> None:
-        """Run Q4 calculation for specified company or all companies."""
+    def run_q4_calculation(self, company_cik: Optional[str] = None, recalculate: bool = False) -> None:
+        """Run Q4 calculation for specified company or all companies.
+        
+        Args:
+            company_cik: Company CIK to process. If None, processes all companies.
+            recalculate: If True, removes existing Q4 values before recalculating.
+        """
         
         self.logger.info("Starting Q4 calculation process...")
         
@@ -31,6 +36,12 @@ class Q4CalculationApp:
             with DatabaseConnection(self.config) as db:
                 repository = FinancialDataRepository(db)
                 service = Q4CalculationService(repository)
+                
+                # Remove existing Q4 values if recalculate flag is set
+                if recalculate:
+                    self.logger.info("Recalculate mode: Removing existing Q4 values...")
+                    deleted_count = repository.delete_all_q4_values(company_cik)
+                    self.logger.info(f"Deleted {deleted_count} existing Q4 values")
                 
                 if company_cik:
                     # Process specific company
@@ -159,6 +170,8 @@ Examples:
   python app.py                           # Process all companies
   python app.py --cik 0000789019          # Process Microsoft only
   python app.py --cik 0000320193          # Process Apple only
+  python app.py --recalculate             # Delete all Q4 values and recalculate for all companies
+  python app.py --cik 0000789019 --recalculate  # Delete and recalculate Q4 for Microsoft only
 
 The system calculates Q4 using: Q4 = Annual - (Q1 + Q2 + Q3)
 All four values (Annual, Q1, Q2, Q3) must be present for calculation.
@@ -171,18 +184,32 @@ All four values (Annual, Q1, Q2, Q3) must be present for calculation.
         help='Company CIK to process (e.g., 0000789019 for Microsoft). If not provided, processes all companies.'
     )
     
+    parser.add_argument(
+        '--recalculate',
+        action='store_true',
+        help='Delete all existing Q4 values before recalculating. Use with caution!'
+    )
+    
     args = parser.parse_args()
     
     app = Q4CalculationApp()
     
     # Display processing message
+    if args.recalculate:
+        if args.cik:
+            print(f"⚠️  RECALCULATE MODE: Removing existing Q4 values for company {args.cik}")
+        else:
+            print("⚠️  RECALCULATE MODE: Removing ALL existing Q4 values from database")
+        print("This will delete Q4 values from income_statement and cash_flow_statement")
+        print()
+    
     if args.cik:
         print(f"Processing Q4 calculations for company: {args.cik}")
     else:
         print("Processing Q4 calculations for all companies...")
     
     try:
-        app.run_q4_calculation(args.cik)
+        app.run_q4_calculation(args.cik, recalculate=args.recalculate)
         print("Q4 calculation completed successfully!")
         
     except Exception as e:
