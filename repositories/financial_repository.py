@@ -85,9 +85,6 @@ class FinancialDataRepository:
         3. Parent concept match (fallback for dimensional concepts without own annual value)
         """
         
-        if not quarterly_parent_concept_name:
-            return None
-        
         # PRIORITY 1: Try to find exact match by concept name AND path
         # This ensures we get the correct dimensional breakdown when multiple paths exist
         if quarterly_path:
@@ -131,13 +128,16 @@ class FinancialDataRepository:
                         return dim_concept
         
         # PRIORITY 3: Fallback to parent concept (will be filtered out later if dimensional)
-        parent_concept = self.normalized_concepts_annual.find_one({
-            "concept": quarterly_parent_concept_name,
-            "company_cik": company_cik,
-            "statement_type": statement_type
-        })
+        # Only try this if we have a valid parent concept name
+        if quarterly_parent_concept_name:
+            parent_concept = self.normalized_concepts_annual.find_one({
+                "concept": quarterly_parent_concept_name,
+                "company_cik": company_cik,
+                "statement_type": statement_type
+            })
+            return parent_concept
         
-        return parent_concept
+        return None
     
     def _map_quarterly_values(self, quarterly_data: QuarterlyData, values: List[Dict]) -> None:
         """Map quarterly values (Q1, Q2, Q3) to QuarterlyData object."""
