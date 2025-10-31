@@ -16,8 +16,9 @@ from repositories.financial_repository import FinancialDataRepository
 class Q4CalculationService:
     """Service for calculating Q4 values for financial statement concepts."""
     
-    def __init__(self, repository: FinancialDataRepository):
+    def __init__(self, repository: FinancialDataRepository, verbose: bool = False):
         self.repository = repository
+        self.verbose = verbose
     
     # ==================== HELPER METHODS ====================
     
@@ -186,7 +187,8 @@ class Q4CalculationService:
             # Insert Q4 value
             if self.repository.insert_q4_value(q4_record):
                 result["success"] = True
-                print(f"✓ Calculated Q4 for {concept_name} ({statement_type}) (Path: {concept_path}) FY{fiscal_year}: {q4_value:,.2f}")
+                if self.verbose:
+                    print(f"✓ Calculated Q4 for {concept_name} ({statement_type}) (Path: {concept_path}) FY{fiscal_year}: {q4_value:,.2f}")
             else:
                 result["reason"] = "Failed to insert Q4 value into database"
         

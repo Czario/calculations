@@ -45,73 +45,97 @@ class FinancialDataRepository:
         
         return self.normalized_concepts_quarterly.find_one(query)
     
-    def _get_parent_concept_info(
+
+
+    def _get_root_parent_concept_info(
         self,
         concept: Dict[str, Any],
         collection_name: str = "normalized_concepts_quarterly"
     ) -> Tuple[Optional[ObjectId], Optional[str]]:
-        """Get parent concept ID and name for a given concept.
+        """Get ROOT parent concept ID and name for a given concept.
+        
+        This traverses up the hierarchy to find the top-level parent concept.
+        For example: meta:FamilyOfAppsMember (003.001) -> us-gaap:OperatingIncomeLoss (003)
         
         Returns:
-            Tuple of (parent_concept_id, parent_concept_name)
+            Tuple of (root_parent_concept_id, root_parent_concept_name)
         """
         collection = getattr(self.db, collection_name)
-        parent_concept_id = concept.get("concept_id")
         
-        if parent_concept_id:
-            # This is a dimensional concept
-            parent_concept = collection.find_one({"_id": parent_concept_id})
-            parent_concept_name = parent_concept.get("concept") if parent_concept else None
-        else:
-            # This is a root concept
-            parent_concept_name = concept.get("concept")
+        # Extract root path from concept path
+        concept_path = concept.get("path", "")
+        if not concept_path:
+            return None, None
         
-        return parent_concept_id, parent_concept_name
+        # Get the root level from path (e.g., "003.001" -> "003", "001.002.001" -> "001")
+        root_path = concept_path.split('.')[0]
+        
+        # Find the root concept by path
+        root_concept = collection.find_one({
+            "path": root_path,
+            "company_cik": concept.get("company_cik"),
+            "statement_type": concept.get("statement_type")
+        })
+        
+        # If not found in same collection, try the other collection
+        if not root_concept:
+            if collection_name == "normalized_concepts_quarterly":
+                root_concept = self.normalized_concepts_annual.find_one({
+                    "path": root_path,
+                    "company_cik": concept.get("company_cik"),
+                    "statement_type": concept.get("statement_type")
+                })
+            else:
+                root_concept = self.normalized_concepts_quarterly.find_one({
+                    "path": root_path,
+                    "company_cik": concept.get("company_cik"),
+                    "statement_type": concept.get("statement_type")
+                })
+        
+        if root_concept:
+            return root_concept.get("_id"), root_concept.get("concept")
+        
+        return None, None
     
     def _find_matching_annual_concept(
         self,
         concept_name: str,
         company_cik: str,
         statement_type: str,
-        quarterly_parent_concept_id: Optional[ObjectId] = None,
-        quarterly_parent_concept_name: Optional[str] = None,
-        quarterly_path: Optional[str] = None
+        quarterly_root_parent_id: Optional[ObjectId] = None,
+        quarterly_root_parent_name: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        """Find matching annual concept using parent concept matching logic.
+        """Find matching annual concept using root parent matching logic only.
         
-        Priority order:
-        1. Exact match by concept name AND path (for precise dimensional matching)
-        2. Exact match by concept name only (for root concepts or single dimensional instance)
-        3. Parent concept match (fallback for dimensional concepts without own annual value)
+        This method finds the annual concept that matches the quarterly concept by:
+        1. Exact match by concept name (for root concepts)
+        2. Root parent-based matching for dimensional concepts
         """
         
-        # PRIORITY 1: Try to find exact match by concept name AND path
-        # This ensures we get the correct dimensional breakdown when multiple paths exist
-        if quarterly_path:
-            exact_match_with_path = self.normalized_concepts_annual.find_one({
-                "concept": concept_name,
-                "path": quarterly_path,
-                "company_cik": company_cik,
-                "statement_type": statement_type
-            })
-            
-            if exact_match_with_path:
-                return exact_match_with_path
-        
-        # PRIORITY 2: Try to find exact match by concept name only
-        # This works for root concepts and dimensional concepts with single instance
+        # Try to find exact match by concept name first
         exact_match = self.normalized_concepts_annual.find_one({
             "concept": concept_name,
             "company_cik": company_cik,
             "statement_type": statement_type
         })
         
+        # Check if there are multiple annual concepts with the same name
         if exact_match:
-            return exact_match
+            all_matches = list(self.normalized_concepts_annual.find({
+                "concept": concept_name,
+                "company_cik": company_cik,
+                "statement_type": statement_type
+            }))
+            
+            # If only one match, it's safe to use
+            if len(all_matches) == 1:
+                return exact_match
+            
+            # If multiple matches, we need root parent-based matching to distinguish
         
-        # PRIORITY 2: If no exact match and this is a dimensional concept, try to find by parent relationship
-        if quarterly_parent_concept_id:
-            # Try to find dimensional concept with same parent
+        # Root parent-based matching for dimensional concepts
+        if quarterly_root_parent_id and quarterly_root_parent_name:
+            # Find all annual dimensional concepts with the same concept name
             annual_dimensional_concepts = list(self.normalized_concepts_annual.find({
                 "concept": concept_name,
                 "company_cik": company_cik,
@@ -119,23 +143,17 @@ class FinancialDataRepository:
                 "dimension_concept": True
             }))
             
-            # Find the one with the same parent concept
+            # Find the one with the same root parent concept
             for dim_concept in annual_dimensional_concepts:
-                annual_parent_id = dim_concept.get("concept_id")
-                if annual_parent_id:
-                    annual_parent = self.normalized_concepts_annual.find_one({"_id": annual_parent_id})
-                    if annual_parent and annual_parent.get("concept") == quarterly_parent_concept_name:
-                        return dim_concept
+                annual_root_parent_id, annual_root_parent_name = self._get_root_parent_concept_info(
+                    dim_concept, "normalized_concepts_annual"
+                )
+                if annual_root_parent_name == quarterly_root_parent_name:
+                    return dim_concept
         
-        # PRIORITY 3: Fallback to parent concept (will be filtered out later if dimensional)
-        # Only try this if we have a valid parent concept name
-        if quarterly_parent_concept_name:
-            parent_concept = self.normalized_concepts_annual.find_one({
-                "concept": quarterly_parent_concept_name,
-                "company_cik": company_cik,
-                "statement_type": statement_type
-            })
-            return parent_concept
+        # Return the exact match if root parent matching didn't work
+        if exact_match:
+            return exact_match
         
         return None
     
@@ -208,15 +226,15 @@ class FinancialDataRepository:
         
         quarterly_concept_id = quarterly_concept["_id"]
         
-        # Get parent concept information
-        quarterly_parent_id, quarterly_parent_name = self._get_parent_concept_info(
+        # Get root parent concept information (traverse to top-level parent)
+        quarterly_root_parent_id, quarterly_root_parent_name = self._get_root_parent_concept_info(
             quarterly_concept, "normalized_concepts_quarterly"
         )
         
-        # Find matching annual concept (pass concept_path for precise matching)
+        # Find matching annual concept using root parent matching
         annual_concept = self._find_matching_annual_concept(
             concept_name, company_cik, statement_type,
-            quarterly_parent_id, quarterly_parent_name, concept_path
+            quarterly_root_parent_id, quarterly_root_parent_name
         )
         
         # Get quarterly values (Q1, Q2, Q3)
@@ -392,15 +410,15 @@ class FinancialDataRepository:
         if not quarterly_concept:
             return None
         
-        # Get parent concept information
-        quarterly_parent_id, quarterly_parent_name = self._get_parent_concept_info(
+        # Get root parent concept information
+        quarterly_root_parent_id, quarterly_root_parent_name = self._get_root_parent_concept_info(
             quarterly_concept, "normalized_concepts_quarterly"
         )
         
-        # Find matching annual concept
+        # Find matching annual concept using root parent matching
         annual_concept = self._find_matching_annual_concept(
             concept_name, company_cik, statement_type,
-            quarterly_parent_id, quarterly_parent_name
+            quarterly_root_parent_id, quarterly_root_parent_name
         )
         
         if not annual_concept:
@@ -455,20 +473,20 @@ class FinancialDataRepository:
     
     # ==================== UTILITY METHODS ====================
     
-    def get_parent_concept_name(
+    def get_root_parent_concept_name(
         self, 
         concept_id: ObjectId, 
         collection_name: str = "normalized_concepts_quarterly"
     ) -> Optional[str]:
-        """Get the parent concept name for a given concept."""
+        """Get the root parent concept name for a given concept."""
         collection = getattr(self.db, collection_name)
         concept = collection.find_one({"_id": concept_id})
         
         if not concept:
             return None
         
-        _, parent_name = self._get_parent_concept_info(concept, collection_name)
-        return parent_name
+        _, root_parent_name = self._get_root_parent_concept_info(concept, collection_name)
+        return root_parent_name
     
     def find_matching_concept_by_parent(
         self,
@@ -540,7 +558,7 @@ class FinancialDataRepository:
         """
         query = {
             "reporting_period.quarter": 4,
-            "statement_type": {"$in": ["income_statement", "cash_flow_statement"]}
+            "statement_type": {"$in": ["income_statement", "cash_flows"]}
         }
         
         if company_cik:
