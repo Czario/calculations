@@ -160,7 +160,7 @@ class Q4CalculationService:
         
         # If not found, try alternative matching using parent concept lookup
         if not annual_metadata:
-            quarterly_parent_name = self.repository.get_parent_concept_name(
+            quarterly_parent_name = self.repository.get_root_parent_concept_name(
                 quarterly_concept_id, "normalized_concepts_quarterly"
             )
             if quarterly_parent_name:
@@ -197,15 +197,9 @@ class Q4CalculationService:
         For dimensional concepts with same path, quarterly_concept should be passed
         to ensure correct concept matching.
         """
-        result = {"success": False, "reason": None}
+        result = {"success": False, "reason": None, "is_point_in_time": False}
         
         try:
-            # Check if this is a point-in-time concept that shouldn't be calculated
-            label = quarterly_concept.get("label", "") if quarterly_concept else ""
-            if self._is_point_in_time_concept(concept_name, label):
-                result["reason"] = "Point-in-time concept (skipped)"
-                return result
-            
             # For dimensional concepts with same path, use concept_id directly
             if quarterly_concept and quarterly_concept.get("_id"):
                 quarterly_data = self.repository.get_quarterly_data_by_concept_id(
@@ -229,14 +223,29 @@ class Q4CalculationService:
                 result["reason"] = "Q4 value already exists"
                 return result
             
-            # Check if we can calculate Q4
-            if not quarterly_data.can_calculate_q4():
-                missing_values = self._get_missing_values_list(quarterly_data)
-                result["reason"] = f"Missing values: {', '.join(missing_values)}"
-                return result
+            # Check if this is a point-in-time concept
+            # For point-in-time concepts, Q4 value = Annual value (not calculated)
+            label = quarterly_concept.get("label", "") if quarterly_concept else ""
+            is_point_in_time = self._is_point_in_time_concept(concept_name, label)
             
-            # Calculate Q4 value
-            q4_value = quarterly_data.calculate_q4()
+            if is_point_in_time:
+                # For point-in-time concepts, copy annual value to Q4
+                if quarterly_data.annual_value is None:
+                    result["reason"] = "Point-in-time concept with no annual value"
+                    result["is_point_in_time"] = True
+                    return result
+                
+                q4_value = quarterly_data.annual_value
+                result["is_point_in_time"] = True
+            else:
+                # For flow concepts, calculate Q4 = Annual - (Q1 + Q2 + Q3)
+                if not quarterly_data.can_calculate_q4():
+                    missing_values = self._get_missing_values_list(quarterly_data)
+                    result["reason"] = f"Missing values: {', '.join(missing_values)}"
+                    return result
+                
+                # Calculate Q4 value
+                q4_value = quarterly_data.calculate_q4()
             
             # Create Q4 record
             q4_record = self._create_q4_record(
@@ -322,7 +331,9 @@ class Q4CalculationService:
                             results["successful_calculations"] += 1
                         else:
                             results["skipped_concepts"] += 1
-                            if result.get("reason"):
+                            # Only log as error if it's NOT a point-in-time concept
+                            # Point-in-time concepts are expected behavior, not errors
+                            if result.get("reason") and not result.get("is_point_in_time", False):
                                 results["errors"].append(
                                     f"Concept {concept_name} (Path: {concept_path}) FY{fiscal_year}: {result['reason']}"
                                 )

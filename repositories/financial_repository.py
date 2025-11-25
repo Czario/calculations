@@ -659,7 +659,7 @@ class FinancialDataRepository:
             return None
         
         # Get parent concept name
-        parent_concept_name = self.get_parent_concept_name(source_concept_id, source_collection_name)
+        parent_concept_name = self.get_root_parent_concept_name(source_concept_id, source_collection_name)
         if not parent_concept_name:
             return None
         
@@ -683,7 +683,7 @@ class FinancialDataRepository:
             }))
             
             for dim_concept in dimensional_concepts:
-                target_parent_name = self.get_parent_concept_name(dim_concept["_id"], target_collection)
+                target_parent_name = self.get_root_parent_concept_name(dim_concept["_id"], target_collection)
                 if target_parent_name == parent_concept_name:
                     return dim_concept
         
