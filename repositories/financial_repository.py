@@ -33,17 +33,61 @@ class FinancialDataRepository:
         concept_name: Optional[str] = None,
         concept_path: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        """Find a quarterly concept by name and/or path."""
-        query = {
+        """Find a quarterly concept by name and/or path.
+        
+        For dimensional concepts (e.g., geographic segments), since quarterly concepts
+        may share the same path, we need to match by looking up the corresponding annual
+        concept first and then using its dimension member.
+        """
+        base_query = {
             "company_cik": company_cik,
             "statement_type": statement_type
         }
-        if concept_name:
-            query["concept"] = concept_name
-        if concept_path:
-            query["path"] = concept_path
         
-        return self.normalized_concepts_quarterly.find_one(query)
+        if concept_name:
+            base_query["concept"] = concept_name
+        
+        # If both name and path provided, need to find the right quarterly concept
+        # For dimensional concepts, path alone may not be enough since multiple regions
+        # can share the same quarterly path
+        if concept_name and concept_path:
+            # First, try to find the corresponding annual concept by path
+            annual_concept = self.normalized_concepts_annual.find_one({
+                "concept": concept_name,
+                "company_cik": company_cik,
+                "statement_type": statement_type,
+                "path": concept_path
+            })
+            
+            # If annual concept found, use its dimension member to find quarterly concept
+            if annual_concept:
+                annual_dimensions = annual_concept.get("dimensions", {})
+                if annual_dimensions and "explicitMember" in annual_dimensions:
+                    annual_member = annual_dimensions["explicitMember"]
+                    
+                    # Find quarterly concept with matching dimension member
+                    candidates = list(self.normalized_concepts_quarterly.find(base_query))
+                    for candidate in candidates:
+                        candidate_dimensions = candidate.get("dimensions", {})
+                        if candidate_dimensions.get("explicitMember") == annual_member:
+                            return candidate
+            
+            # Fallback: try exact path match (for non-dimensional concepts)
+            exact_query = base_query.copy()
+            exact_query["path"] = concept_path
+            result = self.normalized_concepts_quarterly.find_one(exact_query)
+            if result:
+                return result
+            
+            # No good match found
+            return None
+        
+        # If only path provided
+        if concept_path:
+            base_query["path"] = concept_path
+        
+        # Fallback: simple query
+        return self.normalized_concepts_quarterly.find_one(base_query)
     
 
 
@@ -103,47 +147,67 @@ class FinancialDataRepository:
         company_cik: str,
         statement_type: str,
         quarterly_root_parent_id: Optional[ObjectId] = None,
-        quarterly_root_parent_name: Optional[str] = None
+        quarterly_root_parent_name: Optional[str] = None,
+        quarterly_concept: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
-        """Find matching annual concept using root parent matching logic only.
+        """Find matching annual concept using enhanced matching logic.
         
         This method finds the annual concept that matches the quarterly concept by:
-        1. Exact match by concept name (for root concepts)
-        2. Root parent-based matching for dimensional concepts
+        1. Dimension member matching (for geographic/product segments)
+        2. Path-based matching for dimensional concepts (most reliable)
+        3. Root parent-based matching as fallback
+        4. Label-based matching as last resort
         """
         
-        # Try to find exact match by concept name first
-        exact_match = self.normalized_concepts_annual.find_one({
+        # Find all matches by concept name
+        all_matches = list(self.normalized_concepts_annual.find({
             "concept": concept_name,
             "company_cik": company_cik,
             "statement_type": statement_type
-        })
+        }))
         
-        # Check if there are multiple annual concepts with the same name
-        if exact_match:
-            all_matches = list(self.normalized_concepts_annual.find({
+        # If no matches, return None
+        if not all_matches:
+            return None
+        
+        # If only one match, it's safe to use
+        if len(all_matches) == 1:
+            return all_matches[0]
+        
+        # Multiple matches - need to disambiguate
+        # Get quarterly concept details for matching
+        if not quarterly_concept:
+            quarterly_concept = self.normalized_concepts_quarterly.find_one({
                 "concept": concept_name,
                 "company_cik": company_cik,
                 "statement_type": statement_type
-            }))
-            
-            # If only one match, it's safe to use
-            if len(all_matches) == 1:
-                return exact_match
-            
-            # If multiple matches, we need root parent-based matching to distinguish
+            })
         
-        # Root parent-based matching for dimensional concepts
+        if not quarterly_concept:
+            return all_matches[0]  # Fallback to first match
+        
+        quarterly_path = quarterly_concept.get("path", "")
+        quarterly_label = quarterly_concept.get("label", "")
+        quarterly_dimensions = quarterly_concept.get("dimensions", {})
+        
+        # PRIORITY 1: Match by explicit dimension member (handles geographic/product segments)
+        # This is crucial for cases where quarterly concepts share the same path but differ by region
+        if quarterly_dimensions and "explicitMember" in quarterly_dimensions:
+            quarterly_member = quarterly_dimensions["explicitMember"]
+            for candidate in all_matches:
+                candidate_dimensions = candidate.get("dimensions", {})
+                if candidate_dimensions.get("explicitMember") == quarterly_member:
+                    return candidate
+        
+        # PRIORITY 1: Try exact path match (most reliable for dimensional concepts)
+        for candidate in all_matches:
+            if candidate.get("path") == quarterly_path:
+                return candidate
+        
+        # PRIORITY 2: Root parent-based matching for dimensional concepts
         if quarterly_root_parent_id and quarterly_root_parent_name:
-            # Find all annual dimensional concepts with the same concept name
-            annual_dimensional_concepts = list(self.normalized_concepts_annual.find({
-                "concept": concept_name,
-                "company_cik": company_cik,
-                "statement_type": statement_type,
-                "dimension_concept": True
-            }))
+            annual_dimensional_concepts = [c for c in all_matches if c.get("dimension_concept", False)]
             
-            # Find the one with the same root parent concept
             for dim_concept in annual_dimensional_concepts:
                 annual_root_parent_id, annual_root_parent_name = self._get_root_parent_concept_info(
                     dim_concept, "normalized_concepts_annual"
@@ -151,10 +215,26 @@ class FinancialDataRepository:
                 if annual_root_parent_name == quarterly_root_parent_name:
                     return dim_concept
         
-        # Return the exact match if root parent matching didn't work
-        if exact_match:
-            return exact_match
+        # PRIORITY 3: Try exact label match
+        for candidate in all_matches:
+            if candidate.get("label") == quarterly_label:
+                return candidate
         
+        # PRIORITY 4: Try path prefix match (same segment hierarchy)
+        if quarterly_path:
+            quarterly_path_parts = quarterly_path.split('.')
+            for candidate in all_matches:
+                candidate_path = candidate.get("path", "")
+                if candidate_path:
+                    candidate_parts = candidate_path.split('.')
+                    # Match first 2-3 path segments
+                    if (len(quarterly_path_parts) >= 2 and 
+                        len(candidate_parts) >= 2 and
+                        quarterly_path_parts[:2] == candidate_parts[:2]):
+                        return candidate
+        
+        # No good match found - return None to avoid using wrong annual value
+        # This is safer than returning first match which could be completely wrong
         return None
     
     def _map_quarterly_values(self, quarterly_data: QuarterlyData, values: List[Dict]) -> None:
@@ -234,7 +314,8 @@ class FinancialDataRepository:
         # Find matching annual concept using root parent matching
         annual_concept = self._find_matching_annual_concept(
             concept_name, company_cik, statement_type,
-            quarterly_root_parent_id, quarterly_root_parent_name
+            quarterly_root_parent_id, quarterly_root_parent_name,
+            quarterly_concept
         )
         
         # Get quarterly values (Q1, Q2, Q3)
@@ -263,6 +344,77 @@ class FinancialDataRepository:
         # Initialize and populate quarterly data
         quarterly_data = QuarterlyData(
             concept_id=quarterly_concept_id,
+            company_cik=company_cik,
+            fiscal_year=fiscal_year
+        )
+        
+        self._map_quarterly_values(quarterly_data, quarterly_values)
+        
+        if annual_values:
+            quarterly_data.annual_value = annual_values[0]["value"]
+        
+        return quarterly_data
+    
+    def get_quarterly_data_by_concept_id(
+        self,
+        concept_id: ObjectId,
+        company_cik: str,
+        fiscal_year: int,
+        statement_type: str
+    ) -> QuarterlyData:
+        """Get quarterly data directly by concept_id.
+        
+        This is more reliable for dimensional concepts that share the same path.
+        """
+        # Get quarterly concept
+        quarterly_concept = self.normalized_concepts_quarterly.find_one({"_id": concept_id})
+        
+        if not quarterly_concept:
+            return QuarterlyData(
+                concept_id=None,
+                company_cik=company_cik,
+                fiscal_year=fiscal_year
+            )
+        
+        # Get root parent concept information
+        quarterly_root_parent_id, quarterly_root_parent_name = self._get_root_parent_concept_info(
+            quarterly_concept, "normalized_concepts_quarterly"
+        )
+        
+        # Find matching annual concept
+        annual_concept = self._find_matching_annual_concept(
+            quarterly_concept["concept"],
+            company_cik,
+            statement_type,
+            quarterly_root_parent_id,
+            quarterly_root_parent_name,
+            quarterly_concept
+        )
+        
+        # Get quarterly values (Q1, Q2, Q3)
+        quarterly_values = list(self.concept_values_quarterly.find({
+            "concept_id": concept_id,
+            "company_cik": company_cik,
+            "reporting_period.fiscal_year": fiscal_year,
+            "reporting_period.quarter": {"$in": [1, 2, 3]}
+        }))
+        
+        # Get annual value if annual concept found
+        annual_values = []
+        if annual_concept:
+            is_dimensional = quarterly_concept.get("dimension_concept", False)
+            is_exact_match = annual_concept.get("concept") == quarterly_concept["concept"]
+            
+            if not is_dimensional or is_exact_match:
+                annual_values = list(self.concept_values_annual.find({
+                    "concept_id": annual_concept["_id"],
+                    "company_cik": company_cik,
+                    "reporting_period.fiscal_year": fiscal_year
+                }))
+        
+        # Initialize and populate quarterly data
+        quarterly_data = QuarterlyData(
+            concept_id=concept_id,
             company_cik=company_cik,
             fiscal_year=fiscal_year
         )
@@ -418,7 +570,8 @@ class FinancialDataRepository:
         # Find matching annual concept using root parent matching
         annual_concept = self._find_matching_annual_concept(
             concept_name, company_cik, statement_type,
-            quarterly_root_parent_id, quarterly_root_parent_name
+            quarterly_root_parent_id, quarterly_root_parent_name,
+            quarterly_concept
         )
         
         if not annual_concept:

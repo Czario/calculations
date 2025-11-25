@@ -16,11 +16,60 @@ from repositories.financial_repository import FinancialDataRepository
 class Q4CalculationService:
     """Service for calculating Q4 values for financial statement concepts."""
     
+    # Point-in-time concept patterns that should NOT be calculated
+    # These represent snapshots at specific dates, not flows over periods
+    POINT_IN_TIME_PATTERNS = [
+        # Cash and equivalents (balance sheet items)
+        "CashAndCashEquivalents",
+        "CashCashEquivalents",
+        "RestrictedCash",
+        # Period markers
+        "EndOfYear",
+        "EndOfPeriod",
+        "EndOfTheYear",
+        "EndOfThePeriod",
+        "BeginningOfYear",
+        "BeginningOfPeriod",
+        "BeginningOfTheYear",
+        "BeginningOfThePeriod",
+        "AtEndOf",
+        "AtBeginningOf",
+        # Shares outstanding (point-in-time, not cumulative)
+        "SharesOutstanding",
+        "CommonStockSharesOutstanding",
+        "StockSharesOutstanding",
+        # Exchange rate effects and increases/decreases
+        "PeriodIncreaseDecrease",
+        "EffectOfExchangeRate",
+        "EffectOfExchange",
+        # Ending/beginning balances
+        "EndingBalance",
+        "BeginningBalance",
+        "ClosingBalance",
+        "OpeningBalance"
+    ]
+    
     def __init__(self, repository: FinancialDataRepository, verbose: bool = False):
         self.repository = repository
         self.verbose = verbose
     
     # ==================== HELPER METHODS ====================
+    
+    def _is_point_in_time_concept(self, concept_name: str, label: str = "") -> bool:
+        """Check if a concept is point-in-time and should NOT be calculated.
+        
+        Point-in-time concepts represent snapshots at specific dates (like cash balances)
+        rather than flows over a period, so Q4 = Annual - (Q1+Q2+Q3) doesn't apply.
+        """
+        concept_lower = concept_name.lower()
+        label_lower = label.lower()
+        
+        for pattern in self.POINT_IN_TIME_PATTERNS:
+            pattern_lower = pattern.lower()
+            if pattern_lower in concept_lower or pattern_lower in label_lower:
+                return True
+        
+        return False
     
     def _get_missing_values_list(self, quarterly_data: QuarterlyData) -> List[str]:
         """Get list of missing values required for Q4 calculation."""
@@ -139,28 +188,43 @@ class Q4CalculationService:
         concept_path: str,
         company_cik: str, 
         fiscal_year: int,
-        statement_type: str
+        statement_type: str,
+        quarterly_concept: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Calculate Q4 for any statement type - unified calculation method.
         
         This method handles all Q4 calculations regardless of statement type.
+        For dimensional concepts with same path, quarterly_concept should be passed
+        to ensure correct concept matching.
         """
         result = {"success": False, "reason": None}
         
         try:
-            # Get quarterly data
-            quarterly_data = self.repository.get_quarterly_data_for_concept_by_name_and_path(
-                concept_name, concept_path, company_cik, fiscal_year, statement_type
-            )
+            # Check if this is a point-in-time concept that shouldn't be calculated
+            label = quarterly_concept.get("label", "") if quarterly_concept else ""
+            if self._is_point_in_time_concept(concept_name, label):
+                result["reason"] = "Point-in-time concept (skipped)"
+                return result
+            
+            # For dimensional concepts with same path, use concept_id directly
+            if quarterly_concept and quarterly_concept.get("_id"):
+                quarterly_data = self.repository.get_quarterly_data_by_concept_id(
+                    quarterly_concept["_id"], company_cik, fiscal_year, statement_type
+                )
+            else:
+                # Fallback to path-based lookup for non-dimensional concepts
+                quarterly_data = self.repository.get_quarterly_data_for_concept_by_name_and_path(
+                    concept_name, concept_path, company_cik, fiscal_year, statement_type
+                )
             
             # Check if concept was found
             if quarterly_data.concept_id is None:
                 result["reason"] = "Concept not found in quarterly data"
                 return result
             
-            # Check if Q4 already exists
-            if self.repository.check_q4_exists_by_name_and_path(
-                concept_name, concept_path, company_cik, fiscal_year, statement_type
+            # Check if Q4 already exists using concept_id (more reliable)
+            if self.repository.check_q4_exists(
+                quarterly_data.concept_id, company_cik, fiscal_year
             ):
                 result["reason"] = "Q4 value already exists"
                 return result
@@ -248,7 +312,8 @@ class Q4CalculationService:
                             concept_path,
                             company_cik, 
                             fiscal_year,
-                            statement_type
+                            statement_type,
+                            quarterly_concept=concept  # Pass the full concept document
                         )
                         
                         results["processed_concepts"] += 1
