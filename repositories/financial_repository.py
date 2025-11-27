@@ -190,16 +190,21 @@ class FinancialDataRepository:
         quarterly_label = quarterly_concept.get("label", "")
         quarterly_dimensions = quarterly_concept.get("dimensions", {})
         
-        # PRIORITY 1: Match by explicit dimension member (handles geographic/product segments)
-        # This is crucial for cases where quarterly concepts share the same path but differ by region
+        # PRIORITY 1: Match by BOTH explicit dimension member AND path
+        # For dimensional concepts (like DomesticStreamingMember) that appear in multiple
+        # line items (Revenue, Cost of Revenue, Marketing), we MUST match both the member
+        # AND the path to get the correct annual value.
         if quarterly_dimensions and "explicitMember" in quarterly_dimensions:
             quarterly_member = quarterly_dimensions["explicitMember"]
             for candidate in all_matches:
                 candidate_dimensions = candidate.get("dimensions", {})
-                if candidate_dimensions.get("explicitMember") == quarterly_member:
+                candidate_path = candidate.get("path", "")
+                # Match BOTH explicit member AND path
+                if (candidate_dimensions.get("explicitMember") == quarterly_member and
+                    candidate_path == quarterly_path):
                     return candidate
         
-        # PRIORITY 1: Try exact path match (most reliable for dimensional concepts)
+        # PRIORITY 2: Try exact path match alone (for non-dimensional concepts)
         for candidate in all_matches:
             if candidate.get("path") == quarterly_path:
                 return candidate

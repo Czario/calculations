@@ -19,10 +19,11 @@ class Q4CalculationService:
     # Point-in-time concept patterns that should NOT be calculated
     # These represent snapshots at specific dates, not flows over periods
     POINT_IN_TIME_PATTERNS = [
-        # Cash and equivalents (balance sheet items)
+        # Cash and equivalents (balance sheet items - ending balances)
         "CashAndCashEquivalents",
         "CashCashEquivalents",
         "RestrictedCash",
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
         # Period markers
         "EndOfYear",
         "EndOfPeriod",
@@ -34,11 +35,14 @@ class Q4CalculationService:
         "BeginningOfThePeriod",
         "AtEndOf",
         "AtBeginningOf",
-        # Shares outstanding (point-in-time, not cumulative)
+        # Shares outstanding (point-in-time, not cumulative - these are AVERAGES not sums)
         "SharesOutstanding",
         "CommonStockSharesOutstanding",
         "StockSharesOutstanding",
-        # Exchange rate effects and increases/decreases
+        "WeightedAverageNumberOfShares",
+        "WeightedAverageNumberOfDilutedShares",
+        "WeightedAverageNumberOfSharesOutstanding",
+        # Exchange rate effects and increases/decreases (these are reconciliation items)
         "PeriodIncreaseDecrease",
         "EffectOfExchangeRate",
         "EffectOfExchange",
