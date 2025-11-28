@@ -740,6 +740,27 @@ class FinancialDataRepository:
         result = list(self.concept_values_annual.aggregate(pipeline))
         return [item["_id"] for item in result if item["_id"] is not None]
     
+    def get_fiscal_years_for_quarterly_cashflow(self, company_cik: str) -> List[int]:
+        """Get all fiscal years with quarterly cash flow data for a company.
+        
+        This is specifically for cash flow fix process and includes years that may not
+        have annual data yet (like the current fiscal year).
+        """
+        pipeline = [
+            {
+                "$match": {
+                    "company_cik": company_cik,
+                    "statement_type": "cash_flows",
+                    "form_type": "10-Q"
+                }
+            },
+            {"$group": {"_id": "$reporting_period.fiscal_year"}},
+            {"$sort": {"_id": 1}}
+        ]
+        
+        result = list(self.concept_values_quarterly.aggregate(pipeline))
+        return [item["_id"] for item in result if item["_id"] is not None]
+    
     def _concept_value_to_dict(self, concept_value: ConceptValue) -> Dict[str, Any]:
         """Convert ConceptValue dataclass to dictionary for MongoDB insertion."""
         reporting_period_dict = {

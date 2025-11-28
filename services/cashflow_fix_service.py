@@ -26,15 +26,26 @@ class CashFlowFixService:
         self.verbose = verbose
         self.concept_values_quarterly: Collection = repository.concept_values_quarterly
     
-    def fix_cumulative_values_for_company(self, company_cik: str) -> Dict[str, Any]:
+    def fix_cumulative_values_for_company(
+        self, 
+        company_cik: str, 
+        fiscal_year: Optional[int] = None,
+        quarter: Optional[int] = None
+    ) -> Dict[str, Any]:
         """Fix cumulative cash flow values for a specific company.
         
         Args:
             company_cik: Company CIK to process
+            fiscal_year: Optional specific fiscal year to fix. If None, fixes all years.
+            quarter: Optional specific quarter to fix (2 or 3). If None, fixes both Q2 and Q3.
             
         Returns:
             Dictionary with statistics about the fix operation
         """
+        # Validate quarter parameter
+        if quarter is not None and quarter not in [2, 3]:
+            raise ValueError("Quarter must be 2 or 3 (only Q2 and Q3 can be fixed)")
+        
         results = {
             "company_cik": company_cik,
             "fiscal_years_processed": 0,
@@ -46,20 +57,26 @@ class CashFlowFixService:
         }
         
         try:
-            # Get all fiscal years for the company
-            fiscal_years = self.repository.get_fiscal_years_for_company(company_cik)
+            # Get fiscal years to process
+            if fiscal_year:
+                fiscal_years = [fiscal_year]
+                if self.verbose:
+                    print(f"\nProcessing company {company_cik}: FY {fiscal_year} only")
+            else:
+                # Use quarterly cash flow specific method to get ALL years with quarterly data
+                # This includes current/incomplete fiscal years
+                fiscal_years = self.repository.get_fiscal_years_for_quarterly_cashflow(company_cik)
+                if self.verbose:
+                    print(f"\nProcessing company {company_cik}: {len(fiscal_years)} fiscal years found")
             
             if not fiscal_years:
                 results["errors"].append(f"No fiscal years found for company {company_cik}")
                 return results
             
-            if self.verbose:
-                print(f"\nProcessing company {company_cik}: {len(fiscal_years)} fiscal years found")
-            
             # Process each fiscal year
-            for fiscal_year in fiscal_years:
+            for fy in fiscal_years:
                 try:
-                    year_result = self._fix_fiscal_year(company_cik, fiscal_year)
+                    year_result = self._fix_fiscal_year(company_cik, fy, quarter)
                     results["fiscal_years_processed"] += 1
                     results["q2_fixed"] += year_result["q2_fixed"]
                     results["q3_fixed"] += year_result["q3_fixed"]
@@ -68,19 +85,25 @@ class CashFlowFixService:
                     results["errors"].extend(year_result["errors"])
                     
                 except Exception as e:
-                    results["errors"].append(f"Error processing FY{fiscal_year}: {str(e)}")
+                    results["errors"].append(f"Error processing FY{fy}: {str(e)}")
         
         except Exception as e:
             results["errors"].append(f"General error: {str(e)}")
         
         return results
     
-    def _fix_fiscal_year(self, company_cik: str, fiscal_year: int) -> Dict[str, Any]:
+    def _fix_fiscal_year(
+        self, 
+        company_cik: str, 
+        fiscal_year: int,
+        target_quarter: Optional[int] = None
+    ) -> Dict[str, Any]:
         """Fix cumulative values for a specific fiscal year.
         
         Args:
             company_cik: Company CIK
             fiscal_year: Fiscal year to process
+            target_quarter: Optional specific quarter to fix (2 or 3). If None, fixes both.
             
         Returns:
             Dictionary with statistics for this fiscal year
@@ -94,7 +117,8 @@ class CashFlowFixService:
         }
         
         if self.verbose:
-            print(f"  Processing FY{fiscal_year}...")
+            quarter_info = f" (Q{target_quarter} only)" if target_quarter else ""
+            print(f"  Processing FY{fiscal_year}{quarter_info}...")
         
         # Get all cash flow concepts for Q1, Q2, and Q3
         q1_values = self._get_quarterly_values(company_cik, fiscal_year, 1)
@@ -110,69 +134,71 @@ class CashFlowFixService:
             print(f"    Found Q1: {len(q1_values)}, Q2: {len(q2_values)}, Q3: {len(q3_values)} values")
         
         # Fix Q2 values (Q2_actual = Q2_cumulative - Q1)
-        for concept_id_str, q2_value in q2_lookup.items():
-            q1_value = q1_lookup.get(concept_id_str)
-            
-            if q1_value:
-                # Calculate actual Q2 value
-                q2_cumulative = q2_value["value"]
-                q1_actual = q1_value["value"]
-                q2_actual = q2_cumulative - q1_actual
+        if target_quarter is None or target_quarter == 2:
+            for concept_id_str, q2_value in q2_lookup.items():
+                q1_value = q1_lookup.get(concept_id_str)
                 
-                # Update Q2 value in database
-                try:
-                    self.concept_values_quarterly.update_one(
-                        {"_id": q2_value["_id"]},
-                        {"$set": {"value": q2_actual}}
-                    )
-                    results["q2_fixed"] += 1
+                if q1_value:
+                    # Calculate actual Q2 value
+                    q2_cumulative = q2_value["value"]
+                    q1_actual = q1_value["value"]
+                    q2_actual = q2_cumulative - q1_actual
                     
+                    # Update Q2 value in database
+                    try:
+                        self.concept_values_quarterly.update_one(
+                            {"_id": q2_value["_id"]},
+                            {"$set": {"value": q2_actual}}
+                        )
+                        results["q2_fixed"] += 1
+                        
+                        if self.verbose:
+                            concept_name = self._get_concept_name(q2_value["concept_id"])
+                            print(f"    ✓ Fixed Q2 for {concept_name}: {q2_cumulative:,.2f} → {q2_actual:,.2f} (Q2 - Q1)")
+                    
+                    except Exception as e:
+                        results["errors"].append(
+                            f"Error updating Q2 value for concept_id {concept_id_str}: {str(e)}"
+                        )
+                else:
+                    results["q2_skipped"] += 1
                     if self.verbose:
                         concept_name = self._get_concept_name(q2_value["concept_id"])
-                        print(f"    ✓ Fixed Q2 for {concept_name}: {q2_cumulative:,.2f} → {q2_actual:,.2f} (Q2 - Q1)")
-                
-                except Exception as e:
-                    results["errors"].append(
-                        f"Error updating Q2 value for concept_id {concept_id_str}: {str(e)}"
-                    )
-            else:
-                results["q2_skipped"] += 1
-                if self.verbose:
-                    concept_name = self._get_concept_name(q2_value["concept_id"])
-                    print(f"    ⏭️  Skipped Q2 for {concept_name}: No Q1 value found")
+                        print(f"    ⏭️  Skipped Q2 for {concept_name}: No Q1 value found")
         
         # Fix Q3 values (Q3_actual = Q3_cumulative - Q2_cumulative)
         # Note: We use the ORIGINAL Q2 cumulative value, not the fixed Q2 value
-        for concept_id_str, q3_value in q3_lookup.items():
-            q2_value = q2_lookup.get(concept_id_str)
-            
-            if q2_value:
-                # Calculate actual Q3 value using original cumulative values
-                q3_cumulative = q3_value["value"]
-                q2_cumulative = q2_value["value"]  # This is the ORIGINAL cumulative value
-                q3_actual = q3_cumulative - q2_cumulative
+        if target_quarter is None or target_quarter == 3:
+            for concept_id_str, q3_value in q3_lookup.items():
+                q2_value = q2_lookup.get(concept_id_str)
                 
-                # Update Q3 value in database
-                try:
-                    self.concept_values_quarterly.update_one(
-                        {"_id": q3_value["_id"]},
-                        {"$set": {"value": q3_actual}}
-                    )
-                    results["q3_fixed"] += 1
+                if q2_value:
+                    # Calculate actual Q3 value using original cumulative values
+                    q3_cumulative = q3_value["value"]
+                    q2_cumulative = q2_value["value"]  # This is the ORIGINAL cumulative value
+                    q3_actual = q3_cumulative - q2_cumulative
                     
+                    # Update Q3 value in database
+                    try:
+                        self.concept_values_quarterly.update_one(
+                            {"_id": q3_value["_id"]},
+                            {"$set": {"value": q3_actual}}
+                        )
+                        results["q3_fixed"] += 1
+                        
+                        if self.verbose:
+                            concept_name = self._get_concept_name(q3_value["concept_id"])
+                            print(f"    ✓ Fixed Q3 for {concept_name}: {q3_cumulative:,.2f} → {q3_actual:,.2f} (Q3 - Q2)")
+                    
+                    except Exception as e:
+                        results["errors"].append(
+                            f"Error updating Q3 value for concept_id {concept_id_str}: {str(e)}"
+                        )
+                else:
+                    results["q3_skipped"] += 1
                     if self.verbose:
                         concept_name = self._get_concept_name(q3_value["concept_id"])
-                        print(f"    ✓ Fixed Q3 for {concept_name}: {q3_cumulative:,.2f} → {q3_actual:,.2f} (Q3 - Q2)")
-                
-                except Exception as e:
-                    results["errors"].append(
-                        f"Error updating Q3 value for concept_id {concept_id_str}: {str(e)}"
-                    )
-            else:
-                results["q3_skipped"] += 1
-                if self.verbose:
-                    concept_name = self._get_concept_name(q3_value["concept_id"])
-                    print(f"    ⏭️  Skipped Q3 for {concept_name}: No Q2 value found")
+                        print(f"    ⏭️  Skipped Q3 for {concept_name}: No Q2 value found")
         
         return results
     

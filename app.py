@@ -60,7 +60,12 @@ class Q4CalculationApp:
             self.logger.error(f"Application error: {e}")
             raise
     
-    def run_cashflow_fix(self, company_cik: Optional[str] = None) -> None:
+    def run_cashflow_fix(
+        self, 
+        company_cik: Optional[str] = None,
+        fiscal_year: Optional[int] = None,
+        quarter: Optional[int] = None
+    ) -> None:
         """Run cash flow fix process to convert cumulative Q2/Q3 values to quarterly values.
         
         This process:
@@ -69,6 +74,8 @@ class Q4CalculationApp:
         
         Args:
             company_cik: Company CIK to process. If None, processes all companies.
+            fiscal_year: Optional specific fiscal year to fix. If None, fixes all years.
+            quarter: Optional specific quarter to fix (2 or 3). If None, fixes both Q2 and Q3.
         """
         
         if self.verbose:
@@ -81,14 +88,23 @@ class Q4CalculationApp:
                 
                 if company_cik:
                     # Process specific company
-                    print(f"Processing cash flow fix for company: {company_cik}")
+                    target_info = []
+                    if fiscal_year:
+                        target_info.append(f"FY {fiscal_year}")
+                    if quarter:
+                        target_info.append(f"Q{quarter}")
+                    
+                    target_str = " - " + ", ".join(target_info) if target_info else ""
+                    print(f"Processing cash flow fix for company: {company_cik}{target_str}")
                     print("=" * 60)
                     
-                    results = service.fix_cumulative_values_for_company(company_cik)
+                    results = service.fix_cumulative_values_for_company(company_cik, fiscal_year, quarter)
                     self._log_cashflow_fix_results(results)
                 else:
                     # Process all companies
                     print("Processing cash flow fix for all companies...")
+                    if fiscal_year or quarter:
+                        print("⚠️  Warning: fiscal_year and quarter filters are ignored when processing all companies")
                     print("=" * 60)
                     
                     overall_results = service.fix_all_companies()
@@ -439,8 +455,11 @@ Examples:
   python app.py --calculate-q4 --cik 0000789019 --recalculate-q4  # Delete and recalculate Microsoft
   
   # Cash Flow Fix (convert cumulative Q2/Q3 to quarterly):
-  python app.py --fix-cashflow --all-companies                    # Fix all companies
-  python app.py --fix-cashflow --cik 0001326801                   # Fix Meta Platforms only
+  python app.py --fix-cashflow --all-companies                    # Fix all companies, all years
+  python app.py --fix-cashflow --cik 0001326801                   # Fix Meta Platforms, all years
+  python app.py --fix-cashflow --cik 0001326801 --fiscal-year 2025   # Fix Meta FY 2025 only
+  python app.py --fix-cashflow --cik 0001326801 --quarter 2       # Fix Meta Q2 only, all years
+  python app.py --fix-cashflow --cik 0001326801 --fiscal-year 2025 --quarter 2  # Fix Meta FY2025 Q2
   python app.py --fix-cashflow --all-companies --verbose          # Fix all with detailed output
 
 The Q4 system calculates Q4 using: Q4 = Annual - (Q1 + Q2 + Q3)
@@ -448,6 +467,7 @@ The --fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q
 
 Note: You must specify either --calculate-q4 or --fix-cashflow
 Note: You must specify either --all-companies or --cik <CIK>
+Note: --fiscal-year and --quarter work only with --fix-cashflow and --cik
         """
     )
     
@@ -482,6 +502,19 @@ Note: You must specify either --all-companies or --cik <CIK>
     )
     
     parser.add_argument(
+        '--fiscal-year',
+        type=int,
+        help='Specific fiscal year to fix (e.g., 2025). Only with --fix-cashflow and --cik. If not specified, fixes all years.'
+    )
+    
+    parser.add_argument(
+        '--quarter',
+        type=int,
+        choices=[2, 3],
+        help='Specific quarter to fix (2 or 3). Only with --fix-cashflow and --cik. If not specified, fixes both Q2 and Q3.'
+    )
+    
+    parser.add_argument(
         '--verbose',
         action='store_true',
         help='Enable verbose logging showing all error details'
@@ -505,6 +538,13 @@ Note: You must specify either --all-companies or --cik <CIK>
     if args.recalculate_q4 and args.fix_cashflow:
         print("⚠️  Warning: --recalculate-q4 flag is ignored in --fix-cashflow mode")
     
+    # Validate fiscal_year and quarter (only for fix-cashflow with specific company)
+    if (args.fiscal_year or args.quarter) and not args.fix_cashflow:
+        parser.error("--fiscal-year and --quarter can only be used with --fix-cashflow")
+    
+    if (args.fiscal_year or args.quarter) and args.all_companies:
+        parser.error("--fiscal-year and --quarter can only be used with --cik, not --all-companies")
+    
     # Determine company_cik (None means all companies)
     company_cik = args.cik if args.cik else None
     
@@ -522,14 +562,19 @@ Note: You must specify either --all-companies or --cik <CIK>
         print("  • Update values in the database")
         
         if args.cik:
-            print(f"\nTarget: Company {args.cik}")
+            target_parts = [f"Company {args.cik}"]
+            if args.fiscal_year:
+                target_parts.append(f"FY {args.fiscal_year}")
+            if args.quarter:
+                target_parts.append(f"Q{args.quarter} only")
+            print(f"\nTarget: {', '.join(target_parts)}")
         else:
             print("\nTarget: All companies with cash flow data")
         
         print("=" * 60 + "\n")
         
         try:
-            app.run_cashflow_fix(company_cik)
+            app.run_cashflow_fix(company_cik, args.fiscal_year, args.quarter)
             print("\n✅ Cash flow fix completed successfully!")
             
         except Exception as e:
