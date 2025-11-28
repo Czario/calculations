@@ -432,40 +432,53 @@ def main():
         epilog="""
 Examples:
   # Q4 Calculation:
-  python app.py                           # Process all companies
-  python app.py --cik 0000789019          # Process Microsoft only
-  python app.py --cik 0000320193          # Process Apple only
-  python app.py --recalculate             # Delete all Q4 values and recalculate for all companies
-  python app.py --cik 0000789019 --recalculate  # Delete and recalculate Q4 for Microsoft only
+  python app.py --calculate-q4 --all-companies                    # Process all companies
+  python app.py --calculate-q4 --cik 0000789019                   # Process Microsoft only
+  python app.py --calculate-q4 --cik 0000320193                   # Process Apple only
+  python app.py --calculate-q4 --all-companies --recalculate-q4   # Delete all Q4 and recalculate
+  python app.py --calculate-q4 --cik 0000789019 --recalculate-q4  # Delete and recalculate Microsoft
   
   # Cash Flow Fix (convert cumulative Q2/Q3 to quarterly):
-  python app.py fix-cashflow                    # Fix all companies
-  python app.py fix-cashflow --cik 0001326801   # Fix Meta Platforms only
-  python app.py fix-cashflow --verbose          # Fix all companies with detailed output
+  python app.py --fix-cashflow --all-companies                    # Fix all companies
+  python app.py --fix-cashflow --cik 0001326801                   # Fix Meta Platforms only
+  python app.py --fix-cashflow --all-companies --verbose          # Fix all with detailed output
 
 The Q4 system calculates Q4 using: Q4 = Annual - (Q1 + Q2 + Q3)
-The fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q2
+The --fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q2
+
+Note: You must specify either --calculate-q4 or --fix-cashflow
+Note: You must specify either --all-companies or --cik <CIK>
         """
     )
     
     parser.add_argument(
-        'command',
-        nargs='?',
-        default='q4',
-        choices=['q4', 'fix-cashflow'],
-        help='Command to execute: q4 (default) for Q4 calculation, fix-cashflow for cash flow fix'
+        '--calculate-q4',
+        action='store_true',
+        help='Run Q4 calculation process'
+    )
+    
+    parser.add_argument(
+        '--fix-cashflow',
+        action='store_true',
+        help='Run cash flow fix process (convert cumulative Q2/Q3 to quarterly values)'
+    )
+    
+    parser.add_argument(
+        '--all-companies',
+        action='store_true',
+        help='Process all companies in the database'
     )
     
     parser.add_argument(
         '--cik',
         type=str,
-        help='Company CIK to process (e.g., 0000789019 for Microsoft). If not provided, processes all companies.'
+        help='Company CIK to process (e.g., 0000789019 for Microsoft)'
     )
     
     parser.add_argument(
-        '--recalculate',
+        '--recalculate-q4',
         action='store_true',
-        help='Delete all existing Q4 values before recalculating. Use with caution! (Q4 mode only)'
+        help='Delete all existing Q4 values before recalculating. Use with caution! (Only with --calculate-q4)'
     )
     
     parser.add_argument(
@@ -476,10 +489,29 @@ The fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q2
     
     args = parser.parse_args()
     
+    # Validate arguments
+    if not args.calculate_q4 and not args.fix_cashflow:
+        parser.error("You must specify either --calculate-q4 or --fix-cashflow")
+    
+    if args.calculate_q4 and args.fix_cashflow:
+        parser.error("Cannot specify both --calculate-q4 and --fix-cashflow. Choose one.")
+    
+    if not args.all_companies and not args.cik:
+        parser.error("You must specify either --all-companies or --cik <CIK>")
+    
+    if args.all_companies and args.cik:
+        parser.error("Cannot specify both --all-companies and --cik. Choose one.")
+    
+    if args.recalculate_q4 and args.fix_cashflow:
+        print("⚠️  Warning: --recalculate-q4 flag is ignored in --fix-cashflow mode")
+    
+    # Determine company_cik (None means all companies)
+    company_cik = args.cik if args.cik else None
+    
     app = Q4CalculationApp(verbose=args.verbose)
     
     # Execute the appropriate command
-    if args.command == 'fix-cashflow':
+    if args.fix_cashflow:
         # Cash flow fix mode
         print("\n" + "=" * 60)
         print("🔧 CASH FLOW FIX MODE - Converting Cumulative to Quarterly Values")
@@ -496,21 +528,18 @@ The fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q2
         
         print("=" * 60 + "\n")
         
-        if args.recalculate:
-            print("⚠️  Warning: --recalculate flag is ignored in fix-cashflow mode")
-        
         try:
-            app.run_cashflow_fix(args.cik)
+            app.run_cashflow_fix(company_cik)
             print("\n✅ Cash flow fix completed successfully!")
             
         except Exception as e:
             print(f"\n❌ Error: {e}")
             sys.exit(1)
     
-    else:
-        # Q4 calculation mode (default)
+    elif args.calculate_q4:
+        # Q4 calculation mode
         # Display processing message
-        if args.recalculate:
+        if args.recalculate_q4:
             if args.cik:
                 print(f"⚠️  RECALCULATE MODE: Removing existing Q4 values for company {args.cik}")
             else:
@@ -524,7 +553,7 @@ The fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q2
             print("Processing Q4 calculations for all companies...")
         
         try:
-            app.run_q4_calculation(args.cik, recalculate=args.recalculate)
+            app.run_q4_calculation(company_cik, recalculate=args.recalculate_q4)
             print("Q4 calculation completed successfully!")
             
         except Exception as e:

@@ -45,7 +45,7 @@ Q3: $150M  (3 months: Jul-Sep) = $400M - $250M
 ### Fix All Companies
 
 ```bash
-python app.py fix-cashflow
+python app.py --fix-cashflow --all-companies
 ```
 
 This will:
@@ -57,7 +57,7 @@ This will:
 ### Fix Single Company
 
 ```bash
-python app.py fix-cashflow --cik 0001326801
+python app.py --fix-cashflow --cik 0001326801
 ```
 
 Replace `0001326801` with the desired company CIK.
@@ -65,7 +65,8 @@ Replace `0001326801` with the desired company CIK.
 ### Verbose Output
 
 ```bash
-python app.py fix-cashflow --verbose
+python app.py --fix-cashflow --all-companies --verbose
+python app.py --fix-cashflow --cik 0001326801 --verbose
 ```
 
 Shows detailed processing information including:
