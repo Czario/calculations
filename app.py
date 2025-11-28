@@ -5,6 +5,7 @@ from typing import List, Optional, Dict
 from config.database import DatabaseConfig, DatabaseConnection
 from repositories.financial_repository import FinancialDataRepository
 from services.q4_calculation_service import Q4CalculationService
+from services.cashflow_fix_service import CashFlowFixService
 
 
 class Q4CalculationApp:
@@ -54,6 +55,44 @@ class Q4CalculationApp:
                 else:
                     # Process all companies
                     self._process_all_companies(service, repository)
+                    
+        except Exception as e:
+            self.logger.error(f"Application error: {e}")
+            raise
+    
+    def run_cashflow_fix(self, company_cik: Optional[str] = None) -> None:
+        """Run cash flow fix process to convert cumulative Q2/Q3 values to quarterly values.
+        
+        This process:
+        - Converts Q2 6-month cumulative values to 3-month quarterly: Q2 = Q2 - Q1
+        - Converts Q3 9-month cumulative values to 3-month quarterly: Q3 = Q3 - Q2
+        
+        Args:
+            company_cik: Company CIK to process. If None, processes all companies.
+        """
+        
+        if self.verbose:
+            self.logger.info("Starting cash flow fix process...")
+        
+        try:
+            with DatabaseConnection(self.config) as db:
+                repository = FinancialDataRepository(db)
+                service = CashFlowFixService(repository, verbose=self.verbose)
+                
+                if company_cik:
+                    # Process specific company
+                    print(f"Processing cash flow fix for company: {company_cik}")
+                    print("=" * 60)
+                    
+                    results = service.fix_cumulative_values_for_company(company_cik)
+                    self._log_cashflow_fix_results(results)
+                else:
+                    # Process all companies
+                    print("Processing cash flow fix for all companies...")
+                    print("=" * 60)
+                    
+                    overall_results = service.fix_all_companies()
+                    self._log_overall_cashflow_fix_results(overall_results)
                     
         except Exception as e:
             self.logger.error(f"Application error: {e}")
@@ -332,6 +371,54 @@ class Q4CalculationApp:
             return truncated
         
         return error[:max_length-3] + "..."
+    
+    def _log_cashflow_fix_results(self, results: dict) -> None:
+        """Log the results of cash flow fix for a single company."""
+        
+        print("\n" + "=" * 60)
+        print(f"🔧 CASH FLOW FIX RESULTS - {results['company_cik']}")
+        print("=" * 60)
+        print(f"📊 Fiscal years processed: {results['fiscal_years_processed']}")
+        print(f"✅ Q2 values fixed: {results['q2_fixed']}")
+        print(f"✅ Q3 values fixed: {results['q3_fixed']}")
+        print(f"⏭️  Q2 values skipped: {results['q2_skipped']}")
+        print(f"⏭️  Q3 values skipped: {results['q3_skipped']}")
+        
+        if results["errors"]:
+            print(f"\n⚠️  Errors encountered: {len(results['errors'])}")
+            if self.verbose:
+                for error in results["errors"][:10]:  # Show max 10 errors
+                    print(f"  - {error}")
+                if len(results["errors"]) > 10:
+                    print(f"  ... and {len(results['errors']) - 10} more errors")
+        
+        print("=" * 60)
+    
+    def _log_overall_cashflow_fix_results(self, results: dict) -> None:
+        """Log the overall results of cash flow fix for all companies."""
+        
+        print("\n" + "=" * 60)
+        print("🎯 OVERALL CASH FLOW FIX SUMMARY")
+        print("=" * 60)
+        print(f"📊 Total companies: {results['total_companies']}")
+        print(f"✅ Companies processed: {results['companies_processed']}")
+        print(f"🔧 Total Q2 values fixed: {results['total_q2_fixed']}")
+        print(f"🔧 Total Q3 values fixed: {results['total_q3_fixed']}")
+        print(f"⏭️  Total Q2 values skipped: {results['total_q2_skipped']}")
+        print(f"⏭️  Total Q3 values skipped: {results['total_q3_skipped']}")
+        
+        total_fixed = results['total_q2_fixed'] + results['total_q3_fixed']
+        print(f"\n💡 Total values corrected: {total_fixed}")
+        
+        if results["errors"]:
+            print(f"\n⚠️  Overall errors: {len(results['errors'])}")
+            if self.verbose:
+                for error in results["errors"][:10]:
+                    print(f"  - {error}")
+                if len(results["errors"]) > 10:
+                    print(f"  ... and {len(results['errors']) - 10} more errors")
+        
+        print("=" * 60)
 
 
 def main():
@@ -340,19 +427,33 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Calculate Q4 values for financial statements (income statement and cash flows)',
+        description='Financial data processing tool for Q4 calculations and cash flow fixes',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Q4 Calculation:
   python app.py                           # Process all companies
   python app.py --cik 0000789019          # Process Microsoft only
   python app.py --cik 0000320193          # Process Apple only
   python app.py --recalculate             # Delete all Q4 values and recalculate for all companies
   python app.py --cik 0000789019 --recalculate  # Delete and recalculate Q4 for Microsoft only
+  
+  # Cash Flow Fix (convert cumulative Q2/Q3 to quarterly):
+  python app.py fix-cashflow                    # Fix all companies
+  python app.py fix-cashflow --cik 0001326801   # Fix Meta Platforms only
+  python app.py fix-cashflow --verbose          # Fix all companies with detailed output
 
-The system calculates Q4 using: Q4 = Annual - (Q1 + Q2 + Q3)
-All four values (Annual, Q1, Q2, Q3) must be present for calculation.
+The Q4 system calculates Q4 using: Q4 = Annual - (Q1 + Q2 + Q3)
+The fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q2
         """
+    )
+    
+    parser.add_argument(
+        'command',
+        nargs='?',
+        default='q4',
+        choices=['q4', 'fix-cashflow'],
+        help='Command to execute: q4 (default) for Q4 calculation, fix-cashflow for cash flow fix'
     )
     
     parser.add_argument(
@@ -364,7 +465,7 @@ All four values (Annual, Q1, Q2, Q3) must be present for calculation.
     parser.add_argument(
         '--recalculate',
         action='store_true',
-        help='Delete all existing Q4 values before recalculating. Use with caution!'
+        help='Delete all existing Q4 values before recalculating. Use with caution! (Q4 mode only)'
     )
     
     parser.add_argument(
@@ -377,27 +478,58 @@ All four values (Annual, Q1, Q2, Q3) must be present for calculation.
     
     app = Q4CalculationApp(verbose=args.verbose)
     
-    # Display processing message
-    if args.recalculate:
-        if args.cik:
-            print(f"⚠️  RECALCULATE MODE: Removing existing Q4 values for company {args.cik}")
-        else:
-            print("⚠️  RECALCULATE MODE: Removing ALL existing Q4 values from database")
-        print("This will delete Q4 values from income_statement and cash_flow_statement")
-        print()
-    
-    if args.cik:
-        print(f"Processing Q4 calculations for company: {args.cik}")
-    else:
-        print("Processing Q4 calculations for all companies...")
-    
-    try:
-        app.run_q4_calculation(args.cik, recalculate=args.recalculate)
-        print("Q4 calculation completed successfully!")
+    # Execute the appropriate command
+    if args.command == 'fix-cashflow':
+        # Cash flow fix mode
+        print("\n" + "=" * 60)
+        print("🔧 CASH FLOW FIX MODE - Converting Cumulative to Quarterly Values")
+        print("=" * 60)
+        print("This process will:")
+        print("  • Convert Q2 6-month cumulative values to 3-month: Q2 = Q2 - Q1")
+        print("  • Convert Q3 9-month cumulative values to 3-month: Q3 = Q3 - Q2")
+        print("  • Update values in the database")
         
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        if args.cik:
+            print(f"\nTarget: Company {args.cik}")
+        else:
+            print("\nTarget: All companies with cash flow data")
+        
+        print("=" * 60 + "\n")
+        
+        if args.recalculate:
+            print("⚠️  Warning: --recalculate flag is ignored in fix-cashflow mode")
+        
+        try:
+            app.run_cashflow_fix(args.cik)
+            print("\n✅ Cash flow fix completed successfully!")
+            
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            sys.exit(1)
+    
+    else:
+        # Q4 calculation mode (default)
+        # Display processing message
+        if args.recalculate:
+            if args.cik:
+                print(f"⚠️  RECALCULATE MODE: Removing existing Q4 values for company {args.cik}")
+            else:
+                print("⚠️  RECALCULATE MODE: Removing ALL existing Q4 values from database")
+            print("This will delete Q4 values from income_statement and cash_flow_statement")
+            print()
+        
+        if args.cik:
+            print(f"Processing Q4 calculations for company: {args.cik}")
+        else:
+            print("Processing Q4 calculations for all companies...")
+        
+        try:
+            app.run_q4_calculation(args.cik, recalculate=args.recalculate)
+            print("Q4 calculation completed successfully!")
+            
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
