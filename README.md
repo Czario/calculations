@@ -44,6 +44,8 @@ python app.py --fix-cashflow --cik 0001326801
 
 # With verbose output
 python app.py --fix-cashflow --all-companies --verbose
+
+python app.py --calculate-q4 --cik 0001326801
 ```
 
 ### Common Options
