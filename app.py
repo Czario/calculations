@@ -6,6 +6,7 @@ from config.database import DatabaseConfig, DatabaseConnection
 from repositories.financial_repository import FinancialDataRepository
 from services.q4_calculation_service import Q4CalculationService
 from services.cashflow_fix_service import CashFlowFixService
+from services.gross_profit_service import GrossProfitService
 
 
 class Q4CalculationApp:
@@ -55,6 +56,55 @@ class Q4CalculationApp:
                 else:
                     # Process all companies
                     self._process_all_companies(service, repository)
+                    
+        except Exception as e:
+            self.logger.error(f"Application error: {e}")
+            raise
+    
+    def run_gross_profit_calculation(
+        self,
+        company_cik: Optional[str] = None,
+        recalculate: bool = False
+    ) -> None:
+        """Run Gross Profit calculation and insertion process.
+        
+        This process:
+        - Finds Total Revenue and Cost of Revenues concepts
+        - Calculates: Gross Profit = Total Revenues - Cost of Revenues
+        - Creates Gross Profit concept if not exists (us-gaap:GrossProfit, path: 003)
+        - Inserts calculated values for all fiscal years and quarters
+        
+        Args:
+            company_cik: Company CIK to process. If None, processes all companies.
+            recalculate: If True, recalculates even if Gross Profit already exists.
+        """
+        
+        if self.verbose:
+            self.logger.info("Starting Gross Profit calculation process...")
+        
+        try:
+            with DatabaseConnection(self.config) as db:
+                repository = FinancialDataRepository(db)
+                service = GrossProfitService(repository, verbose=self.verbose)
+                
+                if company_cik:
+                    # Process specific company
+                    print(f"Processing Gross Profit calculation for company: {company_cik}")
+                    if recalculate:
+                        print("⚠️  RECALCULATE MODE: Will overwrite existing Gross Profit values")
+                    print("=" * 60)
+                    
+                    results = service.calculate_gross_profit_for_company(company_cik, recalculate)
+                    self._log_gross_profit_results(results)
+                else:
+                    # Process all companies
+                    print("Processing Gross Profit calculation for all companies...")
+                    if recalculate:
+                        print("⚠️  RECALCULATE MODE: Will overwrite existing Gross Profit values")
+                    print("=" * 60)
+                    
+                    overall_results = service.calculate_gross_profit_for_all_companies(recalculate)
+                    self._log_overall_gross_profit_results(overall_results)
                     
         except Exception as e:
             self.logger.error(f"Application error: {e}")
@@ -435,6 +485,61 @@ class Q4CalculationApp:
                     print(f"  ... and {len(results['errors']) - 10} more errors")
         
         print("=" * 60)
+    
+    def _log_gross_profit_results(self, results: dict) -> None:
+        """Log the results of Gross Profit calculation for a single company."""
+        
+        print("\n" + "=" * 60)
+        print(f"💰 GROSS PROFIT CALCULATION RESULTS - {results['company_cik']}")
+        print("=" * 60)
+        print(f"📊 Fiscal years processed: {results['fiscal_years_processed']}")
+        print(f"✅ Quarterly values inserted: {results['quarterly_values_inserted']}")
+        print(f"✅ Annual values inserted: {results['annual_values_inserted']}")
+        
+        if results['quarterly_concepts_created'] > 0 or results['annual_concepts_created'] > 0:
+            print(f"🆕 Concepts created: {results['quarterly_concepts_created']} quarterly, "
+                  f"{results['annual_concepts_created']} annual")
+        
+        if results["skipped_periods"]:
+            print(f"⏭️  Periods skipped: {len(results['skipped_periods'])}")
+            if self.verbose and results["skipped_periods"]:
+                print("  Skipped periods:")
+                for period in results["skipped_periods"][:10]:
+                    print(f"    - {period}")
+                if len(results["skipped_periods"]) > 10:
+                    print(f"    ... and {len(results['skipped_periods']) - 10} more")
+        
+        if results["errors"]:
+            print(f"\n⚠️  Errors encountered: {len(results['errors'])}")
+            if self.verbose:
+                for error in results["errors"][:10]:
+                    print(f"  - {error}")
+                if len(results["errors"]) > 10:
+                    print(f"  ... and {len(results['errors']) - 10} more errors")
+        
+        print("=" * 60)
+    
+    def _log_overall_gross_profit_results(self, results: dict) -> None:
+        """Log the overall results of Gross Profit calculation for all companies."""
+        
+        print("\n" + "=" * 60)
+        print("🎯 OVERALL GROSS PROFIT CALCULATION SUMMARY")
+        print("=" * 60)
+        print(f"📊 Companies processed: {results['companies_processed']}")
+        print(f"✅ Companies successful: {results['companies_successful']}")
+        print(f"❌ Companies failed: {results['companies_failed']}")
+        print(f"💰 Total quarterly values: {results['total_quarterly_values']}")
+        print(f"💰 Total annual values: {results['total_annual_values']}")
+        print(f"🆕 Total concepts created: {results['total_concepts_created']}")
+        
+        total_values = results['total_quarterly_values'] + results['total_annual_values']
+        print(f"\n💡 Total Gross Profit values inserted: {total_values}")
+        
+        if results['companies_processed'] > 0:
+            success_rate = (results['companies_successful'] / results['companies_processed']) * 100
+            print(f"🎯 Success rate: {success_rate:.1f}%")
+        
+        print("=" * 60)
 
 
 def main():
@@ -448,26 +553,34 @@ def main():
         epilog="""
 Examples:
   # Q4 Calculation:
-  python app.py --calculate-q4 --all-companies                    # Process all companies
-  python app.py --calculate-q4 --cik 0000789019                   # Process Microsoft only
-  python app.py --calculate-q4 --cik 0000320193                   # Process Apple only
-  python app.py --calculate-q4 --all-companies --recalculate-q4   # Delete all Q4 and recalculate
-  python app.py --calculate-q4 --cik 0000789019 --recalculate-q4  # Delete and recalculate Microsoft
+  uv run app.py --calculate-q4 --all-companies                    # Process all companies
+  uv run app.py --calculate-q4 --cik 0000789019                   # Process Microsoft only
+  uv run app.py --calculate-q4 --cik 0000320193                   # Process Apple only
+  uv run app.py --calculate-q4 --all-companies --recalculate-q4   # Delete all Q4 and recalculate
+  uv run app.py --calculate-q4 --cik 0000789019 --recalculate-q4  # Delete and recalculate Microsoft
   
   # Cash Flow Fix (convert cumulative Q2/Q3 to quarterly):
-  python app.py --fix-cashflow --all-companies                    # Fix all companies, all years
-  python app.py --fix-cashflow --cik 0001326801                   # Fix Meta Platforms, all years
-  python app.py --fix-cashflow --cik 0001326801 --fiscal-year 2025   # Fix Meta FY 2025 only
-  python app.py --fix-cashflow --cik 0001326801 --quarter 2       # Fix Meta Q2 only, all years
-  python app.py --fix-cashflow --cik 0001326801 --fiscal-year 2025 --quarter 2  # Fix Meta FY2025 Q2
-  python app.py --fix-cashflow --all-companies --verbose          # Fix all with detailed output
+  uv run app.py --fix-cashflow --all-companies                    # Fix all companies, all years
+  uv run app.py --fix-cashflow --cik 0001326801                   # Fix Meta Platforms, all years
+  uv run app.py --fix-cashflow --cik 0001326801 --fiscal-year 2025   # Fix Meta FY 2025 only
+  uv run app.py --fix-cashflow --cik 0001326801 --quarter 2       # Fix Meta Q2 only, all years
+  uv run app.py --fix-cashflow --cik 0001326801 --fiscal-year 2025 --quarter 2  # Fix Meta FY2025 Q2
+  uv run app.py --fix-cashflow --all-companies --verbose          # Fix all with detailed output
+  
+  # Gross Profit Calculation (Gross Profit = Total Revenues - Cost of Revenues):
+  uv run app.py --cal-gross-profit --all-companies                # Process all companies
+  uv run app.py --cal-gross-profit --cik 0000789019               # Process Microsoft only
+  uv run app.py --cal-gross-profit --all-companies --recalculate  # Recalculate existing values
+  uv run app.py --cal-gross-profit --cik 0000789019 --verbose     # Process with detailed output
 
 The Q4 system calculates Q4 using: Q4 = Annual - (Q1 + Q2 + Q3)
 The --fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q2
+The --cal-gross-profit calculates: Gross Profit = Total Revenues - Cost of Revenues
 
-Note: You must specify either --calculate-q4 or --fix-cashflow
+Note: You must specify either --calculate-q4, --fix-cashflow, or --cal-gross-profit
 Note: You must specify either --all-companies or --cik <CIK>
 Note: --fiscal-year and --quarter work only with --fix-cashflow and --cik
+Note: --recalculate works with --cal-gross-profit to overwrite existing values
         """
     )
     
@@ -481,6 +594,12 @@ Note: --fiscal-year and --quarter work only with --fix-cashflow and --cik
         '--fix-cashflow',
         action='store_true',
         help='Run cash flow fix process (convert cumulative Q2/Q3 to quarterly values)'
+    )
+    
+    parser.add_argument(
+        '--cal-gross-profit',
+        action='store_true',
+        help='Calculate and insert Gross Profit values (Gross Profit = Total Revenues - Cost of Revenues)'
     )
     
     parser.add_argument(
@@ -499,6 +618,12 @@ Note: --fiscal-year and --quarter work only with --fix-cashflow and --cik
         '--recalculate-q4',
         action='store_true',
         help='Delete all existing Q4 values before recalculating. Use with caution! (Only with --calculate-q4)'
+    )
+    
+    parser.add_argument(
+        '--recalculate',
+        action='store_true',
+        help='Recalculate and overwrite existing values (works with --cal-gross-profit)'
     )
     
     parser.add_argument(
@@ -523,11 +648,13 @@ Note: --fiscal-year and --quarter work only with --fix-cashflow and --cik
     args = parser.parse_args()
     
     # Validate arguments
-    if not args.calculate_q4 and not args.fix_cashflow:
-        parser.error("You must specify either --calculate-q4 or --fix-cashflow")
+    if not args.calculate_q4 and not args.fix_cashflow and not args.cal_gross_profit:
+        parser.error("You must specify either --calculate-q4, --fix-cashflow, or --cal-gross-profit")
     
-    if args.calculate_q4 and args.fix_cashflow:
-        parser.error("Cannot specify both --calculate-q4 and --fix-cashflow. Choose one.")
+    # Check for mutually exclusive operations
+    operations = sum([args.calculate_q4, args.fix_cashflow, args.cal_gross_profit])
+    if operations > 1:
+        parser.error("Cannot specify multiple operations. Choose one: --calculate-q4, --fix-cashflow, or --cal-gross-profit")
     
     if not args.all_companies and not args.cik:
         parser.error("You must specify either --all-companies or --cik <CIK>")
@@ -535,8 +662,11 @@ Note: --fiscal-year and --quarter work only with --fix-cashflow and --cik
     if args.all_companies and args.cik:
         parser.error("Cannot specify both --all-companies and --cik. Choose one.")
     
-    if args.recalculate_q4 and args.fix_cashflow:
-        print("⚠️  Warning: --recalculate-q4 flag is ignored in --fix-cashflow mode")
+    if args.recalculate_q4 and not args.calculate_q4:
+        parser.error("--recalculate-q4 can only be used with --calculate-q4")
+    
+    if args.recalculate and not args.cal_gross_profit:
+        parser.error("--recalculate can only be used with --cal-gross-profit")
     
     # Validate fiscal_year and quarter (only for fix-cashflow with specific company)
     if (args.fiscal_year or args.quarter) and not args.fix_cashflow:
@@ -551,7 +681,36 @@ Note: --fiscal-year and --quarter work only with --fix-cashflow and --cik
     app = Q4CalculationApp(verbose=args.verbose)
     
     # Execute the appropriate command
-    if args.fix_cashflow:
+    if args.cal_gross_profit:
+        # Gross Profit calculation mode
+        print("\n" + "=" * 60)
+        print("💰 GROSS PROFIT CALCULATION MODE")
+        print("=" * 60)
+        print("This process will:")
+        print("  • Find Total Revenues and Cost of Revenues concepts")
+        print("  • Calculate: Gross Profit = Total Revenues - Cost of Revenues")
+        print("  • Create Gross Profit concept (us-gaap:GrossProfit, path: 003)")
+        print("  • Insert calculated values for all fiscal years and quarters")
+        
+        if args.cik:
+            print(f"\nTarget: Company {args.cik}")
+        else:
+            print("\nTarget: All companies")
+        
+        if args.recalculate:
+            print("\n⚠️  RECALCULATE MODE: Will overwrite existing Gross Profit values")
+        
+        print("=" * 60 + "\n")
+        
+        try:
+            app.run_gross_profit_calculation(company_cik, recalculate=args.recalculate)
+            print("\n✅ Gross Profit calculation completed successfully!")
+            
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            sys.exit(1)
+    
+    elif args.fix_cashflow:
         # Cash flow fix mode
         print("\n" + "=" * 60)
         print("🔧 CASH FLOW FIX MODE - Converting Cumulative to Quarterly Values")
