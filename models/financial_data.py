@@ -71,28 +71,22 @@ class QuarterlyData:
         """
         Check if Q4 can be calculated.
         
-        CRITICAL RULE: Q4 is NEVER calculated if ANY value is missing.
-        This applies to ALL data types: regular concepts, dimensional concepts, 
-        and any other financial data. ALL four values (Annual, Q1, Q2, Q3) 
-        must be present.
+        Q4 can always be calculated. Any null or missing values are treated as 0.
+        This ensures Q4 is calculated even when quarterly or annual data is incomplete.
         """
-        return self.has_complete_quarterly_data() and self.has_annual_value()
+        return True
     
     def calculate_q4(self) -> float:
         """
         Calculate Q4 value using the formula: Annual - (Q1 + Q2 + Q3).
         
-        CRITICAL RULE: This method will raise ValueError if ANY value is missing.
-        All four values (Annual, Q1, Q2, Q3) must be present regardless of 
-        data type (regular, dimensional, or any other concept type).
+        Any null or missing values are treated as 0.
+        This ensures Q4 is calculated even when quarterly or annual data is incomplete.
         """
-        if not self.can_calculate_q4():
-            raise ValueError("Cannot calculate Q4: missing required values")
+        # Treat None values as 0
+        annual = self.annual_value if self.annual_value is not None else 0.0
+        q1 = self.q1_value if self.q1_value is not None else 0.0
+        q2 = self.q2_value if self.q2_value is not None else 0.0
+        q3 = self.q3_value if self.q3_value is not None else 0.0
         
-        # Type assertion is safe here because can_calculate_q4() checks for None values
-        assert self.annual_value is not None
-        assert self.q1_value is not None
-        assert self.q2_value is not None
-        assert self.q3_value is not None
-        
-        return self.annual_value - (self.q1_value + self.q2_value + self.q3_value)
+        return annual - (q1 + q2 + q3)

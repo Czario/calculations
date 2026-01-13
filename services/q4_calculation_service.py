@@ -75,19 +75,6 @@ class Q4CalculationService:
         
         return False
     
-    def _get_missing_values_list(self, quarterly_data: QuarterlyData) -> List[str]:
-        """Get list of missing values required for Q4 calculation."""
-        missing = []
-        if quarterly_data.q1_value is None:
-            missing.append("Q1")
-        if quarterly_data.q2_value is None:
-            missing.append("Q2")
-        if quarterly_data.q3_value is None:
-            missing.append("Q3")
-        if quarterly_data.annual_value is None:
-            missing.append("Annual")
-        return missing
-    
     def _create_q4_reporting_period(
         self,
         annual_period: Dict[str, Any],
@@ -243,12 +230,7 @@ class Q4CalculationService:
                 result["is_point_in_time"] = True
             else:
                 # For flow concepts, calculate Q4 = Annual - (Q1 + Q2 + Q3)
-                if not quarterly_data.can_calculate_q4():
-                    missing_values = self._get_missing_values_list(quarterly_data)
-                    result["reason"] = f"Missing values: {', '.join(missing_values)}"
-                    return result
-                
-                # Calculate Q4 value
+                # Note: Any null values are treated as 0 by the QuarterlyData model
                 q4_value = quarterly_data.calculate_q4()
             
             # Create Q4 record
