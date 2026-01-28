@@ -166,8 +166,50 @@ class FinancialDataRepository:
             "statement_type": statement_type
         }))
         
-        # If no matches, return None
+        # If no matches by name, try alternative matching strategies
         if not all_matches:
+            # Get quarterly concept for alternative matching
+            if not quarterly_concept:
+                quarterly_concept = self.normalized_concepts_quarterly.find_one({
+                    "concept": concept_name,
+                    "company_cik": company_cik,
+                    "statement_type": statement_type
+                })
+            
+            # FALLBACK 1: For segment/dimensional concepts with different names in annual
+            # (e.g., quarterly: aapl:AmericasSegmentMember, annual: us-gaap:OperatingSegmentsMember)
+            # Match by path + statement_type + label
+            if quarterly_concept:
+                quarterly_path = quarterly_concept.get("path", "")
+                quarterly_label = quarterly_concept.get("label", "")
+                
+                if quarterly_path and quarterly_label:
+                    # Try exact path + label match first
+                    annual_by_path_label = self.normalized_concepts_annual.find_one({
+                        "company_cik": company_cik,
+                        "path": quarterly_path,
+                        "statement_type": statement_type,
+                        "label": quarterly_label
+                    })
+                    if annual_by_path_label:
+                        return annual_by_path_label
+                    
+                    # FALLBACK 2: For segments with path mismatches (e.g., Greater China)
+                    # Match by label + statement_type + path prefix (first 2 segments)
+                    # This handles cases where paths differ but are in the same hierarchy
+                    path_parts = quarterly_path.split('.')
+                    if len(path_parts) >= 2:
+                        path_prefix = f"^{path_parts[0]}\\.{path_parts[1]}\\."
+                        annual_by_label_prefix = self.normalized_concepts_annual.find_one({
+                            "company_cik": company_cik,
+                            "path": {"$regex": path_prefix},
+                            "statement_type": statement_type,
+                            "label": quarterly_label
+                        })
+                        if annual_by_label_prefix:
+                            return annual_by_label_prefix
+            
+            # If still no match, return None
             return None
         
         # If only one match, it's safe to use
@@ -334,10 +376,32 @@ class FinancialDataRepository:
         # Get annual value if annual concept found
         annual_values = []
         if annual_concept:
-            # For dimensional concepts, only use annual value if it's an exact match (same concept name)
-            # Don't use parent's annual value as it would give incorrect Q4 calculations
+            # For dimensional concepts, only use annual value if it's an exact match
+            # An "exact match" means either:
+            # 1. Same concept name, OR
+            # 2. Same path + label (for segments where concept names differ between quarterly/annual), OR
+            # 3. Same path prefix (first 2 segments) + label (for segments with path mismatches like Greater China)
             is_dimensional = quarterly_concept.get("dimension_concept", False)
-            is_exact_match = annual_concept.get("concept") == concept_name
+            is_exact_name_match = annual_concept.get("concept") == concept_name
+            
+            quarterly_path = quarterly_concept.get("path", "")
+            annual_path = annual_concept.get("path", "")
+            quarterly_label = quarterly_concept.get("label", "")
+            annual_label = annual_concept.get("label", "")
+            
+            is_exact_path_label_match = (annual_path == quarterly_path and annual_label == quarterly_label)
+            
+            # Check if paths are in same hierarchy (first 2 segments match)
+            quarterly_path_parts = quarterly_path.split('.') if quarterly_path else []
+            annual_path_parts = annual_path.split('.') if annual_path else []
+            same_path_prefix = (
+                len(quarterly_path_parts) >= 2 and
+                len(annual_path_parts) >= 2 and
+                quarterly_path_parts[:2] == annual_path_parts[:2]
+            )
+            is_same_hierarchy_label_match = same_path_prefix and annual_label == quarterly_label
+            
+            is_exact_match = is_exact_name_match or is_exact_path_label_match or is_same_hierarchy_label_match
             
             if not is_dimensional or is_exact_match:
                 annual_values = list(self.concept_values_annual.find({
