@@ -11,6 +11,30 @@ Many companies report cash flow values cumulatively in their 10-Q filings:
 
 This service converts these cumulative values to true quarterly values to enable accurate quarter-over-quarter analysis.
 
+## Incremental Processing (New!)
+
+The service now supports **incremental processing** to avoid re-fixing already-fixed records:
+
+### How It Works
+1. Records are marked with `cashflow_fixed: true` after being fixed
+2. The `original_cumulative_value` is stored for audit/rollback purposes
+3. Subsequent runs automatically skip records with `cashflow_fixed: true`
+4. Use `--force` flag to re-fix all records (ignores the flag)
+
+### New Fields Added to Records
+```json
+{
+  "cashflow_fixed": true,              // Boolean flag indicating record was fixed
+  "cashflow_fixed_at": ISODate(...),   // Timestamp when fix was applied
+  "original_cumulative_value": 250000000  // Original cumulative value (for audit)
+}
+```
+
+### Benefits
+- **Safe for incremental runs**: New quarters are processed without affecting existing data
+- **Audit trail**: Original values are preserved for verification
+- **Force mode available**: Use `--force` when you need to re-fix all records
+
 ## Data Flow
 
 ### Collections Used
@@ -178,19 +202,45 @@ Returns list of all companies with cash flow data using aggregation pipeline.
 - **Q4:** Calculated separately by Q4CalculationService using formula: `Q4 = Annual - (Q1 + Q2 + Q3)`
 
 ### Idempotency
-The service can be run multiple times safely:
-- Uses simple subtraction: `Q2_actual = Q2_cumulative - Q1`
-- If Q2 is already fixed and service runs again, it will recalculate using same logic
+The service now supports true incremental processing:
+- Records are marked with `cashflow_fixed: true` after fixing
+- Subsequent runs automatically skip already-fixed records
+- Use `force=True` to re-fix all records regardless of status
 - **Best Practice:** Run this service BEFORE Q4CalculationService to ensure Q1-Q3 values are correct
 
 ### Data Integrity
 - All updates are done within database transactions
+- Original cumulative values are preserved in `original_cumulative_value` field
 - Errors are logged without stopping the entire process
 - Verbose mode provides detailed logging of each fix
 
 ## Usage Examples
 
-### Fix Single Company
+### Command Line Usage
+
+```bash
+# Incremental processing (default) - only fixes new records
+uv run app.py --fix-cashflow --all-companies
+
+# Fix specific company (incremental)
+uv run app.py --fix-cashflow --cik 0001018724
+
+# Force re-fix ALL records (ignores cashflow_fixed flag)
+uv run app.py --fix-cashflow --all-companies --force
+
+# Fix specific company with force mode
+uv run app.py --fix-cashflow --cik 0001018724 --force
+
+# Fix specific fiscal year
+uv run app.py --fix-cashflow --cik 0001018724 --fiscal-year 2025
+
+# Fix specific quarter
+uv run app.py --fix-cashflow --cik 0001018724 --quarter 2
+```
+
+### Python API Usage
+
+#### Fix Single Company (Incremental)
 ```python
 from services.cashflow_fix_service import CashFlowFixService
 
@@ -199,15 +249,24 @@ result = service.fix_cumulative_values_for_company("0001018724")  # Netflix
 
 print(f"Q2 values fixed: {result['q2_fixed']}")
 print(f"Q3 values fixed: {result['q3_fixed']}")
+print(f"Q2 already fixed (skipped): {result['q2_already_fixed']}")
+print(f"Q3 already fixed (skipped): {result['q3_already_fixed']}")
+```
+
+#### Force Re-Fix (Python API)
+```python
+# Force mode - re-fix all records regardless of cashflow_fixed flag
+service = CashFlowFixService(repository, verbose=True, force=True)
+result = service.fix_cumulative_values_for_company("0001018724")
 ```
 
 ### Fix Specific Quarter
 ```python
 # Fix only Q2 values
-result = service.fix_cumulative_values_for_company("0001018724", target_quarter=2)
+result = service.fix_cumulative_values_for_company("0001018724", quarter=2)
 
 # Fix only Q3 values
-result = service.fix_cumulative_values_for_company("0001018724", target_quarter=3)
+result = service.fix_cumulative_values_for_company("0001018724", quarter=3)
 ```
 
 ### Fix All Companies
@@ -266,7 +325,7 @@ Processing fiscal year 2023...
 }
 ```
 
-### After Fix
+### After Fix (with incremental fields)
 ```json
 {
   "_id": ObjectId("..."),
@@ -274,10 +333,46 @@ Processing fiscal year 2023...
   "company_cik": "0001018724",
   "reporting_period": {"fiscal_year": 2023, "quarter": 2},
   "value": 150000000,  // Actual Q2 value (250M - 100M)
-  "statement_type": "cash_flows"
+  "statement_type": "cash_flows",
+  "cashflow_fixed": true,
+  "cashflow_fixed_at": ISODate("2026-03-04T10:30:00Z"),
+  "original_cumulative_value": 250000000
 }
 ```
 
+## Migration Script
+
+If you have existing data that was already fixed before the incremental feature was added, use the migration script to mark those records:
+
+```bash
+# Preview what will be updated (dry run - default)
+uv run scripts/migrate_cashflow_fixed.py --dry-run
+
+# Preview with per-company breakdown
+uv run scripts/migrate_cashflow_fixed.py --dry-run --verbose
+
+# Actually mark records as fixed
+uv run scripts/migrate_cashflow_fixed.py --execute
+
+# Migrate specific company only
+uv run scripts/migrate_cashflow_fixed.py --cik 0001326801 --execute
+```
+
+The migration script adds:
+- `cashflow_fixed: true`
+- `cashflow_fixed_at: <timestamp>`
+- `cashflow_fixed_by: "migration_script"`
+
+**Note:** Run the migration script **before** using the incremental cashflow fix to avoid re-fixing already fixed data.
+
 ## Summary
 
-The CashFlowFixService is a critical preprocessing step that ensures cash flow values represent true quarterly figures rather than cumulative year-to-date values. This enables accurate quarter-over-quarter analysis and correct Q4 calculations. It should always be run before Q4CalculationService for cash flow statements.
+The CashFlowFixService is a critical preprocessing step that ensures cash flow values represent true quarterly figures rather than cumulative year-to-date values. This enables accurate quarter-over-quarter analysis and correct Q4 calculations. 
+
+**Key features:**
+- **Incremental processing**: Only processes new/unfixed records by default
+- **Force mode**: Use `--force` to re-fix all records when needed
+- **Audit trail**: Stores original cumulative values for verification
+- **Migration support**: Script available for marking existing fixed data
+
+It should always be run before Q4CalculationService for cash flow statements.

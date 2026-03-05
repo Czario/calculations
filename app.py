@@ -114,18 +114,21 @@ class Q4CalculationApp:
         self, 
         company_cik: Optional[str] = None,
         fiscal_year: Optional[int] = None,
-        quarter: Optional[int] = None
+        quarter: Optional[int] = None,
+        force: bool = False
     ) -> None:
         """Run cash flow fix process to convert cumulative Q2/Q3 values to quarterly values.
         
         This process:
         - Converts Q2 6-month cumulative values to 3-month quarterly: Q2 = Q2 - Q1
         - Converts Q3 9-month cumulative values to 3-month quarterly: Q3 = Q3 - Q2
+        - Skips already-fixed records unless force=True
         
         Args:
             company_cik: Company CIK to process. If None, processes all companies.
             fiscal_year: Optional specific fiscal year to fix. If None, fixes all years.
             quarter: Optional specific quarter to fix (2 or 3). If None, fixes both Q2 and Q3.
+            force: If True, re-fix all records regardless of whether they were already fixed.
         """
         
         if self.verbose:
@@ -134,7 +137,7 @@ class Q4CalculationApp:
         try:
             with DatabaseConnection(self.config) as db:
                 repository = FinancialDataRepository(db)
-                service = CashFlowFixService(repository, verbose=self.verbose)
+                service = CashFlowFixService(repository, verbose=self.verbose, force=force)
                 
                 if company_cik:
                     # Process specific company
@@ -143,6 +146,8 @@ class Q4CalculationApp:
                         target_info.append(f"FY {fiscal_year}")
                     if quarter:
                         target_info.append(f"Q{quarter}")
+                    if force:
+                        target_info.append("FORCE MODE")
                     
                     target_str = " - " + ", ".join(target_info) if target_info else ""
                     print(f"Processing cash flow fix for company: {company_cik}{target_str}")
@@ -152,7 +157,8 @@ class Q4CalculationApp:
                     self._log_cashflow_fix_results(results)
                 else:
                     # Process all companies
-                    print("Processing cash flow fix for all companies...")
+                    force_info = " [FORCE MODE]" if force else ""
+                    print(f"Processing cash flow fix for all companies...{force_info}")
                     if fiscal_year or quarter:
                         print("⚠️  Warning: fiscal_year and quarter filters are ignored when processing all companies")
                     print("=" * 60)
@@ -447,8 +453,10 @@ class Q4CalculationApp:
         print(f"📊 Fiscal years processed: {results['fiscal_years_processed']}")
         print(f"✅ Q2 values fixed: {results['q2_fixed']}")
         print(f"✅ Q3 values fixed: {results['q3_fixed']}")
-        print(f"⏭️  Q2 values skipped: {results['q2_skipped']}")
-        print(f"⏭️  Q3 values skipped: {results['q3_skipped']}")
+        print(f"⏩ Q2 already fixed: {results.get('q2_already_fixed', 0)}")
+        print(f"⏩ Q3 already fixed: {results.get('q3_already_fixed', 0)}")
+        print(f"⏭️  Q2 values skipped (no Q1): {results['q2_skipped']}")
+        print(f"⏭️  Q3 values skipped (no Q2): {results['q3_skipped']}")
         
         if results["errors"]:
             print(f"\n⚠️  Errors encountered: {len(results['errors'])}")
@@ -470,11 +478,15 @@ class Q4CalculationApp:
         print(f"✅ Companies processed: {results['companies_processed']}")
         print(f"🔧 Total Q2 values fixed: {results['total_q2_fixed']}")
         print(f"🔧 Total Q3 values fixed: {results['total_q3_fixed']}")
-        print(f"⏭️  Total Q2 values skipped: {results['total_q2_skipped']}")
-        print(f"⏭️  Total Q3 values skipped: {results['total_q3_skipped']}")
+        print(f"⏩ Total Q2 already fixed: {results.get('total_q2_already_fixed', 0)}")
+        print(f"⏩ Total Q3 already fixed: {results.get('total_q3_already_fixed', 0)}")
+        print(f"⏭️  Total Q2 values skipped (no Q1): {results['total_q2_skipped']}")
+        print(f"⏭️  Total Q3 values skipped (no Q2): {results['total_q3_skipped']}")
         
         total_fixed = results['total_q2_fixed'] + results['total_q3_fixed']
-        print(f"\n💡 Total values corrected: {total_fixed}")
+        total_already_fixed = results.get('total_q2_already_fixed', 0) + results.get('total_q3_already_fixed', 0)
+        print(f"\n💡 Total values corrected this run: {total_fixed}")
+        print(f"💡 Total values already fixed (skipped): {total_already_fixed}")
         
         if results["errors"]:
             print(f"\n⚠️  Overall errors: {len(results['errors'])}")
@@ -560,12 +572,14 @@ Examples:
   uv run app.py --calculate-q4 --cik 0000789019 --recalculate-q4  # Delete and recalculate Microsoft
   
   # Cash Flow Fix (convert cumulative Q2/Q3 to quarterly):
-  uv run app.py --fix-cashflow --all-companies                    # Fix all companies, all years
-  uv run app.py --fix-cashflow --cik 0001326801                   # Fix Meta Platforms, all years
+  uv run app.py --fix-cashflow --all-companies                    # Fix all companies (incremental)
+  uv run app.py --fix-cashflow --cik 0001326801                   # Fix Meta Platforms (incremental)
   uv run app.py --fix-cashflow --cik 0001326801 --fiscal-year 2025   # Fix Meta FY 2025 only
   uv run app.py --fix-cashflow --cik 0001326801 --quarter 2       # Fix Meta Q2 only, all years
   uv run app.py --fix-cashflow --cik 0001326801 --fiscal-year 2025 --quarter 2  # Fix Meta FY2025 Q2
   uv run app.py --fix-cashflow --all-companies --verbose          # Fix all with detailed output
+  uv run app.py --fix-cashflow --all-companies --force            # Re-fix ALL records (ignore cashflow_fixed flag)
+  uv run app.py --fix-cashflow --cik 0001326801 --force           # Re-fix Meta (ignore cashflow_fixed flag)
   
   # Gross Profit Calculation (Gross Profit = Total Revenues - Cost of Revenues):
   uv run app.py --cal-gross-profit --all-companies                # Process all companies
@@ -575,12 +589,15 @@ Examples:
 
 The Q4 system calculates Q4 using: Q4 = Annual - (Q1 + Q2 + Q3)
 The --fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q2
+  - By default, already-fixed records are skipped (incremental processing)
+  - Use --force to re-fix all records regardless of cashflow_fixed status
 The --cal-gross-profit calculates: Gross Profit = Total Revenues - Cost of Revenues
 
 Note: You must specify either --calculate-q4, --fix-cashflow, or --cal-gross-profit
 Note: You must specify either --all-companies or --cik <CIK>
 Note: --fiscal-year and --quarter work only with --fix-cashflow and --cik
 Note: --recalculate works with --cal-gross-profit to overwrite existing values
+Note: --force works with --fix-cashflow to re-fix already fixed records
         """
     )
     
@@ -640,6 +657,12 @@ Note: --recalculate works with --cal-gross-profit to overwrite existing values
     )
     
     parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Force re-fix already fixed records. Only with --fix-cashflow. By default, already-fixed records are skipped.'
+    )
+    
+    parser.add_argument(
         '--verbose',
         action='store_true',
         help='Enable verbose logging showing all error details'
@@ -667,6 +690,10 @@ Note: --recalculate works with --cal-gross-profit to overwrite existing values
     
     if args.recalculate and not args.cal_gross_profit:
         parser.error("--recalculate can only be used with --cal-gross-profit")
+    
+    # Validate --force (only for fix-cashflow)
+    if args.force and not args.fix_cashflow:
+        parser.error("--force can only be used with --fix-cashflow")
     
     # Validate fiscal_year and quarter (only for fix-cashflow with specific company)
     if (args.fiscal_year or args.quarter) and not args.fix_cashflow:
@@ -726,14 +753,17 @@ Note: --recalculate works with --cal-gross-profit to overwrite existing values
                 target_parts.append(f"FY {args.fiscal_year}")
             if args.quarter:
                 target_parts.append(f"Q{args.quarter} only")
+            if args.force:
+                target_parts.append("FORCE MODE")
             print(f"\nTarget: {', '.join(target_parts)}")
         else:
-            print("\nTarget: All companies with cash flow data")
+            force_info = " [FORCE MODE]" if args.force else ""
+            print(f"\nTarget: All companies with cash flow data{force_info}")
         
         print("=" * 60 + "\n")
         
         try:
-            app.run_cashflow_fix(company_cik, args.fiscal_year, args.quarter)
+            app.run_cashflow_fix(company_cik, args.fiscal_year, args.quarter, args.force)
             print("\n✅ Cash flow fix completed successfully!")
             
         except Exception as e:

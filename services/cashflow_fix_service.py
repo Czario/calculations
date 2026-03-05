@@ -2,6 +2,11 @@
 
 This service converts 6-month (Q2) and 9-month (Q3) cumulative values 
 to actual quarterly values by subtracting previous quarters.
+
+Incremental Processing:
+- Records are marked with `cashflow_fixed: true` after fixing
+- Subsequent runs skip already-fixed records (only process new data)
+- Use `force=True` to re-fix all records regardless of status
 """
 
 from typing import Dict, Any, List, Optional
@@ -21,9 +26,10 @@ from repositories.financial_repository import FinancialDataRepository
 class CashFlowFixService:
     """Service for fixing cumulative cash flow values in Q2 and Q3."""
     
-    def __init__(self, repository: FinancialDataRepository, verbose: bool = False):
+    def __init__(self, repository: FinancialDataRepository, verbose: bool = False, force: bool = False):
         self.repository = repository
         self.verbose = verbose
+        self.force = force  # If True, re-fix already fixed records
         self.concept_values_quarterly: Collection = repository.concept_values_quarterly
     
     def fix_cumulative_values_for_company(
@@ -53,6 +59,8 @@ class CashFlowFixService:
             "q3_fixed": 0,
             "q2_skipped": 0,
             "q3_skipped": 0,
+            "q2_already_fixed": 0,
+            "q3_already_fixed": 0,
             "errors": []
         }
         
@@ -82,6 +90,8 @@ class CashFlowFixService:
                     results["q3_fixed"] += year_result["q3_fixed"]
                     results["q2_skipped"] += year_result["q2_skipped"]
                     results["q3_skipped"] += year_result["q3_skipped"]
+                    results["q2_already_fixed"] += year_result["q2_already_fixed"]
+                    results["q3_already_fixed"] += year_result["q3_already_fixed"]
                     results["errors"].extend(year_result["errors"])
                     
                 except Exception as e:
@@ -113,12 +123,15 @@ class CashFlowFixService:
             "q3_fixed": 0,
             "q2_skipped": 0,
             "q3_skipped": 0,
+            "q2_already_fixed": 0,
+            "q3_already_fixed": 0,
             "errors": []
         }
         
         if self.verbose:
             quarter_info = f" (Q{target_quarter} only)" if target_quarter else ""
-            print(f"  Processing FY{fiscal_year}{quarter_info}...")
+            force_info = " [FORCE MODE]" if self.force else ""
+            print(f"  Processing FY{fiscal_year}{quarter_info}{force_info}...")
         
         # Get all cash flow concepts for Q1, Q2, and Q3
         q1_values = self._get_quarterly_values(company_cik, fiscal_year, 1)
@@ -136,6 +149,14 @@ class CashFlowFixService:
         # Fix Q2 values (Q2_actual = Q2_cumulative - Q1)
         if target_quarter is None or target_quarter == 2:
             for concept_id_str, q2_value in q2_lookup.items():
+                # Check if already fixed (skip unless force mode)
+                if q2_value.get("cashflow_fixed") and not self.force:
+                    results["q2_already_fixed"] += 1
+                    if self.verbose:
+                        concept_name = self._get_concept_name(q2_value["concept_id"])
+                        print(f"    ⏩ Already fixed Q2 for {concept_name}: skipping")
+                    continue
+                
                 q1_value = q1_lookup.get(concept_id_str)
                 
                 if q1_value:
@@ -144,11 +165,18 @@ class CashFlowFixService:
                     q1_actual = q1_value["value"]
                     q2_actual = q2_cumulative - q1_actual
                     
-                    # Update Q2 value in database
+                    # Update Q2 value in database with cashflow_fixed flag
                     try:
                         self.concept_values_quarterly.update_one(
                             {"_id": q2_value["_id"]},
-                            {"$set": {"value": q2_actual}}
+                            {
+                                "$set": {
+                                    "value": q2_actual,
+                                    "cashflow_fixed": True,
+                                    "cashflow_fixed_at": datetime.utcnow(),
+                                    "original_cumulative_value": q2_cumulative
+                                }
+                            }
                         )
                         results["q2_fixed"] += 1
                         
@@ -170,19 +198,35 @@ class CashFlowFixService:
         # Note: We use the ORIGINAL Q2 cumulative value, not the fixed Q2 value
         if target_quarter is None or target_quarter == 3:
             for concept_id_str, q3_value in q3_lookup.items():
+                # Check if already fixed (skip unless force mode)
+                if q3_value.get("cashflow_fixed") and not self.force:
+                    results["q3_already_fixed"] += 1
+                    if self.verbose:
+                        concept_name = self._get_concept_name(q3_value["concept_id"])
+                        print(f"    ⏩ Already fixed Q3 for {concept_name}: skipping")
+                    continue
+                
                 q2_value = q2_lookup.get(concept_id_str)
                 
                 if q2_value:
                     # Calculate actual Q3 value using original cumulative values
                     q3_cumulative = q3_value["value"]
-                    q2_cumulative = q2_value["value"]  # This is the ORIGINAL cumulative value
+                    # Use original_cumulative_value if Q2 was already fixed, otherwise use current value
+                    q2_cumulative = q2_value.get("original_cumulative_value", q2_value["value"])
                     q3_actual = q3_cumulative - q2_cumulative
                     
-                    # Update Q3 value in database
+                    # Update Q3 value in database with cashflow_fixed flag
                     try:
                         self.concept_values_quarterly.update_one(
                             {"_id": q3_value["_id"]},
-                            {"$set": {"value": q3_actual}}
+                            {
+                                "$set": {
+                                    "value": q3_actual,
+                                    "cashflow_fixed": True,
+                                    "cashflow_fixed_at": datetime.utcnow(),
+                                    "original_cumulative_value": q3_cumulative
+                                }
+                            }
                         )
                         results["q3_fixed"] += 1
                         
@@ -257,6 +301,8 @@ class CashFlowFixService:
             "total_q3_fixed": 0,
             "total_q2_skipped": 0,
             "total_q3_skipped": 0,
+            "total_q2_already_fixed": 0,
+            "total_q3_already_fixed": 0,
             "company_results": [],
             "errors": []
         }
@@ -270,7 +316,8 @@ class CashFlowFixService:
                 overall_results["errors"].append("No companies with cash flow data found")
                 return overall_results
             
-            print(f"Found {len(companies)} companies with cash flow data")
+            force_info = " [FORCE MODE]" if self.force else ""
+            print(f"Found {len(companies)} companies with cash flow data{force_info}")
             print("=" * 60)
             
             # Process each company
@@ -284,11 +331,14 @@ class CashFlowFixService:
                     overall_results["total_q3_fixed"] += company_result["q3_fixed"]
                     overall_results["total_q2_skipped"] += company_result["q2_skipped"]
                     overall_results["total_q3_skipped"] += company_result["q3_skipped"]
+                    overall_results["total_q2_already_fixed"] += company_result["q2_already_fixed"]
+                    overall_results["total_q3_already_fixed"] += company_result["q3_already_fixed"]
                     overall_results["company_results"].append(company_result)
                     
                     # Show company summary
                     if not self.verbose:
-                        print(f"  ✓ Fixed Q2: {company_result['q2_fixed']}, Q3: {company_result['q3_fixed']}")
+                        already_fixed = company_result['q2_already_fixed'] + company_result['q3_already_fixed']
+                        print(f"  ✓ Fixed Q2: {company_result['q2_fixed']}, Q3: {company_result['q3_fixed']}, Already fixed: {already_fixed}")
                         if company_result["errors"]:
                             print(f"  ⚠️  Errors: {len(company_result['errors'])}")
                 
