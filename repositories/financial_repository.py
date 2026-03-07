@@ -153,10 +153,13 @@ class FinancialDataRepository:
         """Find matching annual concept using enhanced matching logic.
         
         This method finds the annual concept that matches the quarterly concept by:
-        1. Dimension member matching (for geographic/product segments)
-        2. Path-based matching for dimensional concepts (most reliable)
-        3. Root parent-based matching as fallback
-        4. Label-based matching as last resort
+        1. Concept name search — when multiple annual concepts share the same name,
+           the one whose path shares the most leading segments with the quarterly
+           concept's path is preferred (path proximity scoring).
+        2. Dimension member + path matching (for geographic/product segments)
+        3. Exact path matching for non-dimensional concepts
+        4. Root parent-based matching as fallback
+        5. Label-based matching as last resort
         """
         
         # Find all matches by concept name
@@ -195,11 +198,13 @@ class FinancialDataRepository:
                         return annual_by_path_label
                     
                     # FALLBACK 2: For segments with path mismatches (e.g., Greater China)
-                    # Match by label + statement_type + path prefix (first 2 segments)
-                    # This handles cases where paths differ but are in the same hierarchy
+                    # Paths are 2 segments deep (e.g. "001.001", "007.001").
+                    # Match by label + same first path segment (same top-level hierarchy group).
+                    # e.g. quarterly path "001.003" → search annual paths starting with "001."
+                    # This avoids crossing into a completely different hierarchy (e.g. "007.*").
                     path_parts = quarterly_path.split('.')
-                    if len(path_parts) >= 2:
-                        path_prefix = f"^{path_parts[0]}\\.{path_parts[1]}\\."
+                    if path_parts:
+                        path_prefix = f"^{path_parts[0]}\\."
                         annual_by_label_prefix = self.normalized_concepts_annual.find_one({
                             "company_cik": company_cik,
                             "path": {"$regex": path_prefix},
@@ -231,7 +236,38 @@ class FinancialDataRepository:
         quarterly_path = quarterly_concept.get("path", "")
         quarterly_label = quarterly_concept.get("label", "")
         quarterly_dimensions = quarterly_concept.get("dimensions", {})
-        
+
+        # PRIORITY 0: Path proximity scoring — when multiple concepts share the same name,
+        # pick the annual concept whose path shares the most leading segments with the
+        # quarterly concept's path.  Paths are 2 segments deep (e.g. "007.001"), so:
+        #   score 2 → exact match  (e.g. quarterly 007.001 == annual 007.001)
+        #   score 1 → same first segment  (e.g. quarterly 007.001 vs annual 007.003)
+        #   score 0 → no overlap at all
+        # The candidate with the highest score wins outright; ties are narrowed down
+        # and passed to the priority checks below for further disambiguation.
+        if quarterly_path:
+            quarterly_path_parts = quarterly_path.split('.')
+
+            def _path_proximity_score(candidate: Dict[str, Any]) -> int:
+                """Return the number of leading path segments that match."""
+                candidate_parts = candidate.get("path", "").split('.')
+                score = 0
+                for qp, cp in zip(quarterly_path_parts, candidate_parts):
+                    if qp == cp:
+                        score += 1
+                    else:
+                        break
+                return score
+
+            best_score = max(_path_proximity_score(c) for c in all_matches)
+            # Only act when path gives a real signal (score > 0)
+            if best_score > 0:
+                closest = [c for c in all_matches if _path_proximity_score(c) == best_score]
+                if len(closest) == 1:
+                    return closest[0]
+                # Narrow all_matches to the closest group before further disambiguation
+                all_matches = closest
+
         # PRIORITY 1: Match by BOTH explicit dimension member AND path
         # For dimensional concepts (like DomesticStreamingMember) that appear in multiple
         # line items (Revenue, Cost of Revenue, Marketing), we MUST match both the member
@@ -245,11 +281,6 @@ class FinancialDataRepository:
                 if (candidate_dimensions.get("explicitMember") == quarterly_member and
                     candidate_path == quarterly_path):
                     return candidate
-        
-        # PRIORITY 2: Try exact path match alone (for non-dimensional concepts)
-        for candidate in all_matches:
-            if candidate.get("path") == quarterly_path:
-                return candidate
         
         # PRIORITY 2: Root parent-based matching for dimensional concepts
         if quarterly_root_parent_id and quarterly_root_parent_name:
@@ -266,19 +297,6 @@ class FinancialDataRepository:
         for candidate in all_matches:
             if candidate.get("label") == quarterly_label:
                 return candidate
-        
-        # PRIORITY 4: Try path prefix match (same segment hierarchy)
-        if quarterly_path:
-            quarterly_path_parts = quarterly_path.split('.')
-            for candidate in all_matches:
-                candidate_path = candidate.get("path", "")
-                if candidate_path:
-                    candidate_parts = candidate_path.split('.')
-                    # Match first 2-3 path segments
-                    if (len(quarterly_path_parts) >= 2 and 
-                        len(candidate_parts) >= 2 and
-                        quarterly_path_parts[:2] == candidate_parts[:2]):
-                        return candidate
         
         # No good match found - return None to avoid using wrong annual value
         # This is safer than returning first match which could be completely wrong
@@ -389,19 +407,11 @@ class FinancialDataRepository:
             quarterly_label = quarterly_concept.get("label", "")
             annual_label = annual_concept.get("label", "")
             
+            # Paths are 2 segments deep (e.g. "007.001"), so an exact path + label match
+            # is the most reliable signal for dimensional segment concepts.
             is_exact_path_label_match = (annual_path == quarterly_path and annual_label == quarterly_label)
             
-            # Check if paths are in same hierarchy (first 2 segments match)
-            quarterly_path_parts = quarterly_path.split('.') if quarterly_path else []
-            annual_path_parts = annual_path.split('.') if annual_path else []
-            same_path_prefix = (
-                len(quarterly_path_parts) >= 2 and
-                len(annual_path_parts) >= 2 and
-                quarterly_path_parts[:2] == annual_path_parts[:2]
-            )
-            is_same_hierarchy_label_match = same_path_prefix and annual_label == quarterly_label
-            
-            is_exact_match = is_exact_name_match or is_exact_path_label_match or is_same_hierarchy_label_match
+            is_exact_match = is_exact_name_match or is_exact_path_label_match
             
             if not is_dimensional or is_exact_match:
                 annual_values = list(self.concept_values_annual.find({
