@@ -26,12 +26,19 @@ class Q4CalculationApp:
         )
         self.logger = logging.getLogger(__name__)
     
-    def run_q4_calculation(self, company_cik: Optional[str] = None, recalculate: bool = False) -> None:
+    def run_q4_calculation(
+        self,
+        company_cik: Optional[str] = None,
+        recalculate: bool = False,
+        statement: str = "all"
+    ) -> None:
         """Run Q4 calculation for specified company or all companies.
         
         Args:
             company_cik: Company CIK to process. If None, processes all companies.
             recalculate: If True, removes existing Q4 values before recalculating.
+            statement: Which statement to calculate — "is" (income statement),
+                       "cf" (cash flows), or "all" (both). Default: "all".
         """
         
         if self.verbose:
@@ -52,10 +59,10 @@ class Q4CalculationApp:
                 
                 if company_cik:
                     # Process specific company
-                    self._process_company(service, company_cik)
+                    self._process_company(service, company_cik, statement)
                 else:
                     # Process all companies
-                    self._process_all_companies(service, repository)
+                    self._process_all_companies(service, repository, statement)
                     
         except Exception as e:
             self.logger.error(f"Application error: {e}")
@@ -170,30 +177,46 @@ class Q4CalculationApp:
             self.logger.error(f"Application error: {e}")
             raise
     
-    def _process_company(self, service: Q4CalculationService, company_cik: str) -> None:
-        """Process Q4 calculations for a specific company (both income statement and cash flow)."""
+    def _process_company(
+        self,
+        service: Q4CalculationService,
+        company_cik: str,
+        statement: str = "all"
+    ) -> None:
+        """Process Q4 calculations for a specific company.
+        
+        Args:
+            statement: "is", "cf", or "all".
+        """
         
         if self.verbose:
             self.logger.info(f"Processing Q4 calculations for company: {company_cik}")
         
         # Process income statement
-        if self.verbose:
-            self.logger.info(f"Calculating income statement Q4 for {company_cik}...")
-        income_results = service.calculate_q4_for_company(company_cik)
-        self._log_results(company_cik, income_results)
+        if statement in ("is", "all"):
+            if self.verbose:
+                self.logger.info(f"Calculating income statement Q4 for {company_cik}...")
+            income_results = service.calculate_q4_for_company(company_cik)
+            self._log_results(company_cik, income_results)
         
         # Process cash flow statement
-        if self.verbose:
-            self.logger.info(f"Calculating cash flow statement Q4 for {company_cik}...")
-        cashflow_results = service.calculate_q4_for_cash_flow(company_cik)
-        self._log_results(company_cik, cashflow_results)
+        if statement in ("cf", "all"):
+            if self.verbose:
+                self.logger.info(f"Calculating cash flow statement Q4 for {company_cik}...")
+            cashflow_results = service.calculate_q4_for_cash_flow(company_cik)
+            self._log_results(company_cik, cashflow_results)
     
     def _process_all_companies(
         self, 
         service: Q4CalculationService, 
-        repository: FinancialDataRepository
+        repository: FinancialDataRepository,
+        statement: str = "all"
     ) -> None:
-        """Process Q4 calculations for all companies."""
+        """Process Q4 calculations for all companies.
+        
+        Args:
+            statement: "is", "cf", or "all".
+        """
         
         if self.verbose:
             self.logger.info("Processing Q4 calculations for all companies...")
@@ -218,24 +241,26 @@ class Q4CalculationApp:
                     self.logger.info(f"Processing company {idx}/{len(companies)}: {company_cik}")
                 
                 # Process income statement
-                if self.verbose:
-                    self.logger.info(f"  → Income Statement Q4 calculations")
-                income_results = service.calculate_q4_for_company(company_cik)
-                self._log_results(company_cik, income_results)
-                
-                total_processed += income_results["processed_concepts"]
-                total_successful += income_results["successful_calculations"]
-                total_skipped += income_results["skipped_concepts"]
+                if statement in ("is", "all"):
+                    if self.verbose:
+                        self.logger.info(f"  → Income Statement Q4 calculations")
+                    income_results = service.calculate_q4_for_company(company_cik)
+                    self._log_results(company_cik, income_results)
+                    
+                    total_processed += income_results["processed_concepts"]
+                    total_successful += income_results["successful_calculations"]
+                    total_skipped += income_results["skipped_concepts"]
                 
                 # Process cash flow statement
-                if self.verbose:
-                    self.logger.info(f"  → Cash Flow Statement Q4 calculations")
-                cashflow_results = service.calculate_q4_for_cash_flow(company_cik)
-                self._log_results(company_cik, cashflow_results)
-                
-                total_processed += cashflow_results["processed_concepts"]
-                total_successful += cashflow_results["successful_calculations"]
-                total_skipped += cashflow_results["skipped_concepts"]
+                if statement in ("cf", "all"):
+                    if self.verbose:
+                        self.logger.info(f"  → Cash Flow Statement Q4 calculations")
+                    cashflow_results = service.calculate_q4_for_cash_flow(company_cik)
+                    self._log_results(company_cik, cashflow_results)
+                    
+                    total_processed += cashflow_results["processed_concepts"]
+                    total_successful += cashflow_results["successful_calculations"]
+                    total_skipped += cashflow_results["skipped_concepts"]
                 
             except Exception as e:
                 self.logger.error(f"Error processing company {company_cik}: {e}")
@@ -565,11 +590,13 @@ def main():
         epilog="""
 Examples:
   # Q4 Calculation:
-  uv run app.py --calculate-q4 --all-companies                    # Process all companies
-  uv run app.py --calculate-q4 --cik 0000789019                   # Process Microsoft only
-  uv run app.py --calculate-q4 --cik 0000320193                   # Process Apple only
-  uv run app.py --calculate-q4 --all-companies --recalculate-q4   # Delete all Q4 and recalculate
-  uv run app.py --calculate-q4 --cik 0000789019 --recalculate-q4  # Delete and recalculate Microsoft
+  uv run app.py --calculate-q4 --all-companies                              # Process all companies (IS + CF)
+  uv run app.py --calculate-q4 --cik 0000789019                             # Process Microsoft (IS + CF)
+  uv run app.py --calculate-q4 --cik 0000320193 --statement is              # Income statement only
+  uv run app.py --calculate-q4 --cik 0000320193 --statement cf              # Cash flows only
+  uv run app.py --calculate-q4 --all-companies --statement is               # All companies, IS only
+  uv run app.py --calculate-q4 --all-companies --recalculate-q4             # Delete all Q4 and recalculate
+  uv run app.py --calculate-q4 --cik 0000789019 --recalculate-q4            # Delete and recalculate Microsoft
   
   # Cash Flow Fix (convert cumulative Q2/Q3 to quarterly):
   uv run app.py --fix-cashflow --all-companies                    # Fix all companies (incremental)
@@ -595,6 +622,7 @@ The --cal-gross-profit calculates: Gross Profit = Total Revenues - Cost of Reven
 
 Note: You must specify either --calculate-q4, --fix-cashflow, or --cal-gross-profit
 Note: You must specify either --all-companies or --cik <CIK>
+Note: --statement works only with --calculate-q4  (choices: is, cf, all — default: all)
 Note: --fiscal-year and --quarter work only with --fix-cashflow and --cik
 Note: --recalculate works with --cal-gross-profit to overwrite existing values
 Note: --force works with --fix-cashflow to re-fix already fixed records
@@ -605,6 +633,20 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
         '--calculate-q4',
         action='store_true',
         help='Run Q4 calculation process'
+    )
+    
+    parser.add_argument(
+        '--statement',
+        type=str,
+        choices=['is', 'cf', 'all'],
+        default='all',
+        help=(
+            'Which statement to calculate Q4 for. '
+            '"is" = income statement only, '
+            '"cf" = cash flows only, '
+            '"all" = both (default). '
+            'Only applies to --calculate-q4.'
+        )
     )
     
     parser.add_argument(
@@ -687,6 +729,9 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
     
     if args.recalculate_q4 and not args.calculate_q4:
         parser.error("--recalculate-q4 can only be used with --calculate-q4")
+    
+    if args.statement != 'all' and not args.calculate_q4:
+        parser.error("--statement can only be used with --calculate-q4")
     
     if args.recalculate and not args.cal_gross_profit:
         parser.error("--recalculate can only be used with --cal-gross-profit")
@@ -772,6 +817,9 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
     
     elif args.calculate_q4:
         # Q4 calculation mode
+        statement_labels = {'is': 'Income Statement', 'cf': 'Cash Flows', 'all': 'Income Statement + Cash Flows'}
+        statement_label = statement_labels[args.statement]
+
         # Display processing message
         if args.recalculate_q4:
             if args.cik:
@@ -782,12 +830,12 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
             print()
         
         if args.cik:
-            print(f"Processing Q4 calculations for company: {args.cik}")
+            print(f"Processing Q4 calculations for company: {args.cik}  [{statement_label}]")
         else:
-            print("Processing Q4 calculations for all companies...")
+            print(f"Processing Q4 calculations for all companies...  [{statement_label}]")
         
         try:
-            app.run_q4_calculation(company_cik, recalculate=args.recalculate_q4)
+            app.run_q4_calculation(company_cik, recalculate=args.recalculate_q4, statement=args.statement)
             print("Q4 calculation completed successfully!")
             
         except Exception as e:

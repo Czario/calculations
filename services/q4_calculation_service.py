@@ -352,6 +352,16 @@ class Q4CalculationService:
             "cash_flows",
             self.repository.get_cash_flow_concepts
         )
+
+    def calculate_q4_for_all_statements(self, company_cik: str) -> List[Dict[str, Any]]:
+        """Calculate Q4 values for all supported statement types of a company.
+        
+        Returns a list with one result dict per statement type.
+        """
+        return [
+            self.calculate_q4_for_company(company_cik),
+            self.calculate_q4_for_cash_flow(company_cik),
+        ]
     
     # ==================== LEGACY COMPATIBILITY METHODS ====================
     

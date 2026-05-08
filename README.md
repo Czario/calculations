@@ -27,6 +27,15 @@ uv run app.py --calculate-q4 --cik 0000789019
 # Recalculate (delete existing Q4 first)
 uv run app.py --calculate-q4 --all-companies --recalculate-q4
 uv run app.py --calculate-q4 --cik 0000789019 --recalculate-q4
+
+# Income statement only
+uv run app.py --calculate-q4 --cik 0000320193 --statement is
+
+# Cash flows only
+uv run app.py --calculate-q4 --all-companies --statement cf
+
+# Both (default — same as before)
+uv run app.py --calculate-q4 --cik 0000789019
 ```
 
 ### Cash Flow Fix
