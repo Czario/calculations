@@ -590,13 +590,15 @@ def main():
         epilog="""
 Examples:
   # Q4 Calculation:
-  uv run app.py --calculate-q4 --all-companies                              # Process all companies (IS + CF)
-  uv run app.py --calculate-q4 --cik 0000789019                             # Process Microsoft (IS + CF)
-  uv run app.py --calculate-q4 --cik 0000320193 --statement is              # Income statement only
-  uv run app.py --calculate-q4 --cik 0000320193 --statement cf              # Cash flows only
-  uv run app.py --calculate-q4 --all-companies --statement is               # All companies, IS only
-  uv run app.py --calculate-q4 --all-companies --recalculate-q4             # Delete all Q4 and recalculate
-  uv run app.py --calculate-q4 --cik 0000789019 --recalculate-q4            # Delete and recalculate Microsoft
+  uv run app.py --calculate-q4 --all-companies                                         # Process all companies (IS + CF)
+  uv run app.py --calculate-q4 --cik 0000789019                                        # Process Microsoft (IS + CF)
+  uv run app.py --calculate-q4 --cik 0000789019 0000320193                             # Process Microsoft + Apple
+  uv run app.py --calculate-q4 --cik 0000320193 --statement is                         # Income statement only
+  uv run app.py --calculate-q4 --cik 0000320193 --statement cf                         # Cash flows only
+  uv run app.py --calculate-q4 --cik 0000320193 0000789019 --statement is              # Multiple CIKs, IS only
+  uv run app.py --calculate-q4 --all-companies --statement is                          # All companies, IS only
+  uv run app.py --calculate-q4 --all-companies --recalculate-q4                        # Delete all Q4 and recalculate
+  uv run app.py --calculate-q4 --cik 0000789019 --recalculate-q4                       # Delete and recalculate Microsoft
   
   # Cash Flow Fix (convert cumulative Q2/Q3 to quarterly):
   uv run app.py --fix-cashflow --all-companies                    # Fix all companies (incremental)
@@ -621,9 +623,9 @@ The --fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q
 The --cal-gross-profit calculates: Gross Profit = Total Revenues - Cost of Revenues
 
 Note: You must specify either --calculate-q4, --fix-cashflow, or --cal-gross-profit
-Note: You must specify either --all-companies or --cik <CIK>
+Note: You must specify either --all-companies or --cik <CIK> [<CIK> ...]
 Note: --statement works only with --calculate-q4  (choices: is, cf, all — default: all)
-Note: --fiscal-year and --quarter work only with --fix-cashflow and --cik
+Note: --fiscal-year and --quarter work only with --fix-cashflow and a single --cik
 Note: --recalculate works with --cal-gross-profit to overwrite existing values
 Note: --force works with --fix-cashflow to re-fix already fixed records
         """
@@ -670,7 +672,9 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
     parser.add_argument(
         '--cik',
         type=str,
-        help='Company CIK to process (e.g., 0000789019 for Microsoft)'
+        nargs='+',
+        metavar='CIK',
+        help='One or more company CIKs to process (e.g., --cik 0000789019 0000320193)'
     )
     
     parser.add_argument(
@@ -722,7 +726,7 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
         parser.error("Cannot specify multiple operations. Choose one: --calculate-q4, --fix-cashflow, or --cal-gross-profit")
     
     if not args.all_companies and not args.cik:
-        parser.error("You must specify either --all-companies or --cik <CIK>")
+        parser.error("You must specify either --all-companies or --cik <CIK> [<CIK> ...]")
     
     if args.all_companies and args.cik:
         parser.error("Cannot specify both --all-companies and --cik. Choose one.")
@@ -747,8 +751,11 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
     if (args.fiscal_year or args.quarter) and args.all_companies:
         parser.error("--fiscal-year and --quarter can only be used with --cik, not --all-companies")
     
-    # Determine company_cik (None means all companies)
-    company_cik = args.cik if args.cik else None
+    if (args.fiscal_year or args.quarter) and args.cik and len(args.cik) > 1:
+        parser.error("--fiscal-year and --quarter can only be used with a single --cik")
+    
+    # Build the list of CIKs to process (None → all companies handled inside app methods)
+    cik_list: Optional[List[str]] = args.cik if args.cik else None  # None means all-companies mode
     
     app = Q4CalculationApp(verbose=args.verbose)
     
@@ -764,8 +771,8 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
         print("  • Create Gross Profit concept (us-gaap:GrossProfit, path: 003)")
         print("  • Insert calculated values for all fiscal years and quarters")
         
-        if args.cik:
-            print(f"\nTarget: Company {args.cik}")
+        if cik_list:
+            print(f"\nTarget: {len(cik_list)} company/companies: {', '.join(cik_list)}")
         else:
             print("\nTarget: All companies")
         
@@ -775,7 +782,9 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
         print("=" * 60 + "\n")
         
         try:
-            app.run_gross_profit_calculation(company_cik, recalculate=args.recalculate)
+            targets = cik_list if cik_list else [None]
+            for cik in targets:
+                app.run_gross_profit_calculation(cik, recalculate=args.recalculate)
             print("\n✅ Gross Profit calculation completed successfully!")
             
         except Exception as e:
@@ -792,8 +801,8 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
         print("  • Convert Q3 9-month cumulative values to 3-month: Q3 = Q3 - Q2")
         print("  • Update values in the database")
         
-        if args.cik:
-            target_parts = [f"Company {args.cik}"]
+        if cik_list:
+            target_parts = [f"{len(cik_list)} company/companies: {', '.join(cik_list)}"]
             if args.fiscal_year:
                 target_parts.append(f"FY {args.fiscal_year}")
             if args.quarter:
@@ -808,7 +817,9 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
         print("=" * 60 + "\n")
         
         try:
-            app.run_cashflow_fix(company_cik, args.fiscal_year, args.quarter, args.force)
+            targets = cik_list if cik_list else [None]
+            for cik in targets:
+                app.run_cashflow_fix(cik, args.fiscal_year, args.quarter, args.force)
             print("\n✅ Cash flow fix completed successfully!")
             
         except Exception as e:
@@ -822,20 +833,22 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
 
         # Display processing message
         if args.recalculate_q4:
-            if args.cik:
-                print(f"⚠️  RECALCULATE MODE: Removing existing Q4 values for company {args.cik}")
+            if cik_list:
+                print(f"⚠️  RECALCULATE MODE: Removing existing Q4 values for: {', '.join(cik_list)}")
             else:
                 print("⚠️  RECALCULATE MODE: Removing ALL existing Q4 values from database")
             print("This will delete Q4 values from income_statement and cash_flow_statement")
             print()
         
-        if args.cik:
-            print(f"Processing Q4 calculations for company: {args.cik}  [{statement_label}]")
+        if cik_list:
+            print(f"Processing Q4 calculations for {len(cik_list)} company/companies: {', '.join(cik_list)}  [{statement_label}]")
         else:
             print(f"Processing Q4 calculations for all companies...  [{statement_label}]")
         
         try:
-            app.run_q4_calculation(company_cik, recalculate=args.recalculate_q4, statement=args.statement)
+            targets = cik_list if cik_list else [None]
+            for cik in targets:
+                app.run_q4_calculation(cik, recalculate=args.recalculate_q4, statement=args.statement)
             print("Q4 calculation completed successfully!")
             
         except Exception as e:
