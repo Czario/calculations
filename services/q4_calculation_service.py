@@ -92,7 +92,7 @@ class Q4CalculationService:
             company_name=annual_period["company_name"],
             fiscal_year=fiscal_year,
             quarter=4,
-            accession_number=annual_period["accession_number"],
+            accession_number=annual_period.get("accession_number", ""),
             period_type="quarterly",
             start_date=annual_period.get("start_date"),
             context_id=annual_period.get("context_id"),
@@ -241,6 +241,7 @@ class Q4CalculationService:
             
             if q4_record is None:
                 result["reason"] = "Could not create Q4 record (missing annual filing metadata)"
+                result["no_annual_data"] = True  # Expected skip — no annual data for this FY
                 return result
             
             # Insert Q4 value
@@ -317,9 +318,14 @@ class Q4CalculationService:
                             results["successful_calculations"] += 1
                         else:
                             results["skipped_concepts"] += 1
-                            # Only log as error if it's NOT a point-in-time concept
-                            # Point-in-time concepts are expected behavior, not errors
-                            if result.get("reason") and not result.get("is_point_in_time", False):
+                            # Only log as error if it's NOT an expected skip condition:
+                            # - point-in-time concepts (expected, Q4 = annual value)
+                            # - no_annual_data (expected, concept has no annual records for this FY)
+                            is_expected_skip = (
+                                result.get("is_point_in_time", False)
+                                or result.get("no_annual_data", False)
+                            )
+                            if result.get("reason") and not is_expected_skip:
                                 results["errors"].append(
                                     f"Concept {concept_name} (Path: {concept_path}) FY{fiscal_year}: {result['reason']}"
                                 )
