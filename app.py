@@ -17,6 +17,58 @@ class Q4CalculationApp:
         self.verbose = verbose
         self.setup_logging()
     
+    def resolve_tickers_to_ciks(self, tickers: List[str]) -> Dict[str, Optional[str]]:
+        """Resolve ticker symbols to CIK numbers using the companies collection.
+        
+        Args:
+            tickers: List of ticker symbols (e.g., ['AAPL', 'MSFT'])
+            
+        Returns:
+            Dict mapping each ticker to its CIK (or None if not found)
+        """
+        result = {}
+        try:
+            with DatabaseConnection(self.config) as db:
+                companies_collection = db["companies"]
+                for ticker in tickers:
+                    ticker_clean = ticker.strip().upper()
+                    company = companies_collection.find_one({"ticker_symbol": ticker_clean})
+                    if company and company.get("cik"):
+                        result[ticker_clean] = company["cik"]
+                        if self.verbose:
+                            self.logger.info(f"Resolved {ticker_clean} -> CIK {company['cik']} ({company.get('name', '')})")
+                    else:
+                        result[ticker_clean] = None
+                        self.logger.warning(f"Ticker '{ticker_clean}' not found in companies collection")
+        except Exception as e:
+            self.logger.error(f"Error resolving tickers: {e}")
+            for ticker in tickers:
+                result[ticker.strip().upper()] = None
+        return result
+    
+    def read_tickers_from_file(self, filepath: str) -> List[str]:
+        """Read ticker symbols from a file (one per line, skips blanks/comments).
+        
+        Args:
+            filepath: Path to the ticker file
+            
+        Returns:
+            List of ticker symbols
+        """
+        tickers = []
+        try:
+            with open(filepath, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        tickers.append(line)
+            if self.verbose:
+                self.logger.info(f"Read {len(tickers)} ticker(s) from {filepath}")
+        except Exception as e:
+            self.logger.error(f"Error reading ticker file {filepath}: {e}")
+            raise
+        return tickers
+    
     def setup_logging(self):
         """Setup logging configuration."""
         level = logging.DEBUG if self.verbose else logging.WARNING
@@ -599,6 +651,8 @@ Examples:
   uv run app.py --calculate-q4 --all-companies --statement is                          # All companies, IS only
   uv run app.py --calculate-q4 --all-companies --recalculate-q4                        # Delete all Q4 and recalculate
   uv run app.py --calculate-q4 --cik 0000789019 --recalculate-q4                       # Delete and recalculate Microsoft
+  uv run app.py --calculate-q4 --file process_stocks.txt                               # Process tickers from file
+  uv run app.py --calculate-q4 --file process_stocks.txt --statement is                # Process tickers, IS only
   
   # Cash Flow Fix (convert cumulative Q2/Q3 to quarterly):
   uv run app.py --fix-cashflow --all-companies                    # Fix all companies (incremental)
@@ -609,12 +663,14 @@ Examples:
   uv run app.py --fix-cashflow --all-companies --verbose          # Fix all with detailed output
   uv run app.py --fix-cashflow --all-companies --force            # Re-fix ALL records (ignore cashflow_fixed flag)
   uv run app.py --fix-cashflow --cik 0001326801 --force           # Re-fix Meta (ignore cashflow_fixed flag)
+  uv run app.py --fix-cashflow --file process_stocks.txt          # Fix tickers from file
   
   # Gross Profit Calculation (Gross Profit = Total Revenues - Cost of Revenues):
   uv run app.py --cal-gross-profit --all-companies                # Process all companies
   uv run app.py --cal-gross-profit --cik 0000789019               # Process Microsoft only
   uv run app.py --cal-gross-profit --all-companies --recalculate  # Recalculate existing values
   uv run app.py --cal-gross-profit --cik 0000789019 --verbose     # Process with detailed output
+  uv run app.py --cal-gross-profit --file process_stocks.txt      # Process tickers from file
 
 The Q4 system calculates Q4 using: Q4 = Annual - (Q1 + Q2 + Q3)
 The --fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q2
@@ -623,7 +679,8 @@ The --fix-cashflow process converts cumulative values: Q2 = Q2 - Q1, Q3 = Q3 - Q
 The --cal-gross-profit calculates: Gross Profit = Total Revenues - Cost of Revenues
 
 Note: You must specify either --calculate-q4, --fix-cashflow, or --cal-gross-profit
-Note: You must specify either --all-companies or --cik <CIK> [<CIK> ...]
+Note: You must specify either --all-companies, --cik <CIK> [<CIK> ...], or --file <FILE>
+Note: --file <FILE> reads ticker symbols (one per line) and resolves them to CIKs via the companies collection
 Note: --statement works only with --calculate-q4  (choices: is, cf, all — default: all)
 Note: --fiscal-year and --quarter work only with --fix-cashflow and a single --cik
 Note: --recalculate works with --cal-gross-profit to overwrite existing values
@@ -678,6 +735,13 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
     )
     
     parser.add_argument(
+        '--file',
+        type=str,
+        metavar='FILE',
+        help='Path to a file with ticker symbols (one per line). Resolves tickers to CIKs via the companies collection.'
+    )
+    
+    parser.add_argument(
         '--recalculate-q4',
         action='store_true',
         help='Delete all existing Q4 values before recalculating. Use with caution! (Only with --calculate-q4)'
@@ -725,11 +789,11 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
     if operations > 1:
         parser.error("Cannot specify multiple operations. Choose one: --calculate-q4, --fix-cashflow, or --cal-gross-profit")
     
-    if not args.all_companies and not args.cik:
-        parser.error("You must specify either --all-companies or --cik <CIK> [<CIK> ...]")
+    if not args.all_companies and not args.cik and not args.file:
+        parser.error("You must specify --all-companies, --cik <CIK> [<CIK> ...], or --file <FILE>")
     
-    if args.all_companies and args.cik:
-        parser.error("Cannot specify both --all-companies and --cik. Choose one.")
+    if sum([bool(args.all_companies), bool(args.cik), bool(args.file)]) > 1:
+        parser.error("Cannot specify multiple target options. Choose one: --all-companies, --cik, or --file")
     
     if args.recalculate_q4 and not args.calculate_q4:
         parser.error("--recalculate-q4 can only be used with --calculate-q4")
@@ -749,13 +813,46 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
         parser.error("--fiscal-year and --quarter can only be used with --fix-cashflow")
     
     if (args.fiscal_year or args.quarter) and args.all_companies:
-        parser.error("--fiscal-year and --quarter can only be used with --cik, not --all-companies")
+        parser.error("--fiscal-year and --quarter can only be used with --cik or --file, not --all-companies")
     
     if (args.fiscal_year or args.quarter) and args.cik and len(args.cik) > 1:
         parser.error("--fiscal-year and --quarter can only be used with a single --cik")
     
+    if (args.fiscal_year or args.quarter) and args.file:
+        # --file may resolve to multiple CIKs; warn but don't block — validation happens at runtime
+        pass
+    
     # Build the list of CIKs to process (None → all companies handled inside app methods)
     cik_list: Optional[List[str]] = args.cik if args.cik else None  # None means all-companies mode
+    ticker_source: Optional[str] = None  # Track if CIKs came from a ticker file
+    
+    # Resolve tickers from --file to CIKs
+    if args.file:
+        app = Q4CalculationApp(verbose=args.verbose)
+        tickers = app.read_tickers_from_file(args.file)
+        if not tickers:
+            print(f"❌ No ticker symbols found in {args.file}")
+            sys.exit(1)
+        resolution = app.resolve_tickers_to_ciks(tickers)
+        cik_list = []
+        not_found = []
+        for ticker, cik in resolution.items():
+            if cik:
+                cik_list.append(cik)
+            else:
+                not_found.append(ticker)
+        if not_found:
+            print(f"⚠️  Ticker(s) not found in companies collection: {', '.join(not_found)}")
+        if not cik_list:
+            print("❌ No valid CIKs resolved from the ticker file")
+            sys.exit(1)
+        ticker_source = args.file
+        if app.verbose:
+            app.logger.info(f"Resolved {len(cik_list)} CIK(s) from ticker file {args.file}")
+        
+        # Warn if --fiscal-year/--quarter used with multiple CIKs from file
+        if (args.fiscal_year or args.quarter) and len(cik_list) > 1:
+            print(f"⚠️  Warning: --fiscal-year/--quarter with --file resolved to {len(cik_list)} companies; filters will be applied per-company")
     
     app = Q4CalculationApp(verbose=args.verbose)
     
@@ -772,7 +869,10 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
         print("  • Insert calculated values for all fiscal years and quarters")
         
         if cik_list:
-            print(f"\nTarget: {len(cik_list)} company/companies: {', '.join(cik_list)}")
+            if ticker_source:
+                print(f"\nTarget: {len(cik_list)} company/companies from ticker file {ticker_source}")
+            else:
+                print(f"\nTarget: {len(cik_list)} company/companies: {', '.join(cik_list)}")
         else:
             print("\nTarget: All companies")
         
@@ -802,7 +902,10 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
         print("  • Update values in the database")
         
         if cik_list:
-            target_parts = [f"{len(cik_list)} company/companies: {', '.join(cik_list)}"]
+            if ticker_source:
+                target_parts = [f"{len(cik_list)} company/companies from ticker file {ticker_source}"]
+            else:
+                target_parts = [f"{len(cik_list)} company/companies: {', '.join(cik_list)}"]
             if args.fiscal_year:
                 target_parts.append(f"FY {args.fiscal_year}")
             if args.quarter:
@@ -834,14 +937,20 @@ Note: --force works with --fix-cashflow to re-fix already fixed records
         # Display processing message
         if args.recalculate_q4:
             if cik_list:
-                print(f"⚠️  RECALCULATE MODE: Removing existing Q4 values for: {', '.join(cik_list)}")
+                if ticker_source:
+                    print(f"⚠️  RECALCULATE MODE: Removing existing Q4 values for {len(cik_list)} company/companies from ticker file {ticker_source}")
+                else:
+                    print(f"⚠️  RECALCULATE MODE: Removing existing Q4 values for: {', '.join(cik_list)}")
             else:
                 print("⚠️  RECALCULATE MODE: Removing ALL existing Q4 values from database")
             print("This will delete Q4 values from income_statement and cash_flow_statement")
             print()
         
         if cik_list:
-            print(f"Processing Q4 calculations for {len(cik_list)} company/companies: {', '.join(cik_list)}  [{statement_label}]")
+            if ticker_source:
+                print(f"Processing Q4 calculations for {len(cik_list)} company/companies from ticker file {ticker_source}  [{statement_label}]")
+            else:
+                print(f"Processing Q4 calculations for {len(cik_list)} company/companies: {', '.join(cik_list)}  [{statement_label}]")
         else:
             print(f"Processing Q4 calculations for all companies...  [{statement_label}]")
         

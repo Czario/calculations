@@ -28,7 +28,8 @@ uv run app.py --calculate-q4 --cik 0000789019
 uv run app.py --calculate-q4 --all-companies --recalculate-q4
 uv run app.py --calculate-q4 --cik 0000789019 --recalculate-q4
 
-# Income statement only
+# Income statement only 
+uv run app.py --calculate-q4 --file process_stocks.txt --statement is
 uv run app.py --calculate-q4 --cik 0000320193 --statement is
 
 # Cash flows only
